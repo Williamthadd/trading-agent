@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
+  <h1>Trading Agent William</h1>
 </p>
 
 <div align="center" style="line-height: 1;">
