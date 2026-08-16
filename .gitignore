@@ -221,3 +221,11 @@ __marimo__/
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
 reports/
+
+# Web dashboard state and Firebase service-account credentials
+data/webapp/
+secrets/*.json
+firebase-service-account*.json
+serviceAccountKey*.json
+.firebase/
+firebase-debug.log*

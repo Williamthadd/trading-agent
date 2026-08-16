@@ -169,6 +169,38 @@ python -m cli.main     # alternative: run directly from source
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
+### Web Dashboard
+
+Install the optional web dependencies and launch the Bloomberg-style dashboard:
+
+```powershell
+conda activate tradingagents
+pip install -e ".[web]"
+tradingagents-web
+```
+
+Then open `http://127.0.0.1:8000`. The dashboard exposes the same analysis,
+provider, model, and research-depth choices as the CLI, streams each agent's
+progress, and groups completed runs by the day each run was created. It works
+immediately with local JSON persistence; to save runs in Cloud Firestore, follow
+[`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md). Keep all LLM API keys and
+Firebase service-account credentials in `.env`/`secrets` on the server only.
+The server binds to `127.0.0.1` by default. Do not expose it directly to the
+public internet: the run endpoints intentionally have no user authentication
+and can consume the configured market-data and LLM quotas. Put authentication,
+TLS, and rate limiting in front of it before any shared deployment.
+
+Web analyses execute serially because the upstream data-vendor configuration is
+process-global; the bounded queue accepts four active/queued runs by default.
+The default restart reconciliation assumes one web-server instance. If multiple
+instances intentionally share one Firestore database, set
+`WEB_RECONCILE_STALE_RUNS=false` and use external job ownership/coordination.
+For the supported local deployment, run the provided `tradingagents-web`
+launcher with its single worker; do not add `uvicorn --workers 2` (or more).
+Per-request Ollama or OpenAI-compatible endpoint URLs must match the endpoint
+configured on the server unless `WEB_ALLOW_CUSTOM_BACKEND_URLS=true`; only
+enable that override for trusted users and trusted endpoints.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.
