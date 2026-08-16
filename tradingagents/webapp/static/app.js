@@ -2,6 +2,12 @@
   "use strict";
 
   const SETTINGS_KEY = "tradingagents.web.settings.v1";
+  const TEXT_SCALE_KEY = "tradingagents.web.textScale.v1";
+  const TEXT_SCALE_MIN = 85;
+  const TEXT_SCALE_MAX = 160;
+  const TEXT_SCALE_STEP = 5;
+  const TEXT_SCALE_DEFAULT = 110;
+  const BASE_TEXT_SIZE_PX = 13;
   const POLL_INTERVAL_MS = 1600;
   const TERMINAL_STATUSES = new Set(["completed", "failed", "error", "cancelled", "canceled"]);
   const ACTIVE_STATUSES = new Set(["queued", "pending", "running", "processing", "in_progress"]);
@@ -28,6 +34,7 @@
 
   function init() {
     cacheDom();
+    initializeTextSizeControl();
     bindEvents();
     startClock();
 
@@ -45,7 +52,8 @@
 
   function cacheDom() {
     const ids = [
-      "session-state", "storage-dot", "storage-status", "clock-date", "clock-time", "clock-zone",
+      "session-state", "storage-dot", "storage-status", "text-size-range", "text-size-value",
+      "clock-date", "clock-time", "clock-zone",
       "analysis-form", "ticker-input", "analysis-date", "language-select", "custom-language-input",
       "depth-select", "analyst-options", "crypto-analyst-note", "provider-select", "quick-model-select", "deep-model-select",
       "custom-quick-model", "custom-deep-model", "backend-url-group", "backend-url-select",
@@ -107,6 +115,9 @@
     dom.backendUrlSelect.addEventListener("change", function () {
       syncBackendInput();
       saveSettings();
+    });
+    dom.textSizeRange.addEventListener("input", function () {
+      applyTextScale(dom.textSizeRange.value, true);
     });
 
     dom.tabs.forEach(function (tab) {
@@ -1337,6 +1348,46 @@
 
   function setSessionState(value) {
     dom.sessionState.textContent = value;
+  }
+
+  function initializeTextSizeControl() {
+    let initialValue = document.documentElement.dataset.textScale;
+    if (!initialValue) {
+      try {
+        initialValue = window.localStorage.getItem(TEXT_SCALE_KEY);
+      } catch (_error) {
+        initialValue = TEXT_SCALE_DEFAULT;
+      }
+    }
+    applyTextScale(initialValue, false);
+  }
+
+  function applyTextScale(rawValue, persist) {
+    let value = Number(rawValue);
+    if (!Number.isFinite(value)) value = TEXT_SCALE_DEFAULT;
+    value = Math.round(value / TEXT_SCALE_STEP) * TEXT_SCALE_STEP;
+    value = Math.max(TEXT_SCALE_MIN, Math.min(TEXT_SCALE_MAX, value));
+
+    const scale = value / 100;
+    const progress = (value - TEXT_SCALE_MIN) / (TEXT_SCALE_MAX - TEXT_SCALE_MIN) * 100;
+    const baseSize = (BASE_TEXT_SIZE_PX * scale).toFixed(1).replace(/\.0$/, "");
+    const visibleValue = value + "% / " + baseSize + "px";
+
+    document.documentElement.style.setProperty("--text-scale", String(scale));
+    document.documentElement.dataset.textScale = String(value);
+    dom.textSizeRange.value = String(value);
+    dom.textSizeRange.style.setProperty("--range-progress", progress + "%");
+    dom.textSizeRange.setAttribute("aria-valuetext", value + " percent; base text " + baseSize + " pixels");
+    dom.textSizeValue.value = visibleValue;
+    dom.textSizeValue.textContent = visibleValue;
+
+    if (persist) {
+      try {
+        window.localStorage.setItem(TEXT_SCALE_KEY, String(value));
+      } catch (_error) {
+        // The visual preference still applies for this session.
+      }
+    }
   }
 
   function startClock() {

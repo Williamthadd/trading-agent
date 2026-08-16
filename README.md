@@ -185,6 +185,8 @@ progress, and groups completed runs by the day each run was created. It works
 immediately with local JSON persistence; to save runs in Cloud Firestore, follow
 [`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md). Keep all LLM API keys and
 Firebase service-account credentials in `.env`/`secrets` on the server only.
+Use the header's **Text Size** slider to scale interface text from 85% to 160%;
+the browser remembers the selected size for the next session.
 The server binds to `127.0.0.1` by default. Do not expose it directly to the
 public internet: the run endpoints intentionally have no user authentication
 and can consume the configured market-data and LLM quotas. Put authentication,

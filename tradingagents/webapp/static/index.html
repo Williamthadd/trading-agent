@@ -6,6 +6,20 @@
   <meta name="theme-color" content="#050708">
   <meta name="description" content="TradingAgents market intelligence workstation">
   <title>TradingAgents // Intelligence Workstation</title>
+  <script>
+    (function () {
+      var value = 110;
+      try {
+        var storedValue = Number(localStorage.getItem("tradingagents.web.textScale.v1"));
+        if (Number.isFinite(storedValue) && storedValue > 0) value = storedValue;
+      } catch (_error) {
+        // Storage can be unavailable under strict browser privacy policies.
+      }
+      value = Math.max(85, Math.min(160, Math.round(value / 5) * 5));
+      document.documentElement.style.setProperty("--text-scale", String(value / 100));
+      document.documentElement.dataset.textScale = String(value);
+    })();
+  </script>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
@@ -37,6 +51,15 @@
             <span class="strip-label">DATA STORE</span>
             <strong id="storage-status">CHECKING</strong>
           </div>
+        </div>
+        <div class="strip-cell text-size-cell">
+          <div class="text-size-meta">
+            <label class="strip-label" for="text-size-range">TEXT SIZE</label>
+            <output id="text-size-value" for="text-size-range" aria-live="polite">110% / 14.3px</output>
+          </div>
+          <input id="text-size-range" class="text-size-range" type="range"
+                 min="85" max="160" step="5" value="110"
+                 aria-label="Global interface text size" aria-describedby="text-size-value">
         </div>
         <div class="strip-cell clock-cell">
           <span class="strip-label" id="clock-date">---</span>
