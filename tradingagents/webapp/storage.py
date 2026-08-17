@@ -207,8 +207,8 @@ class LocalJsonRunStore:
                     _json_safe(value),
                     handle,
                     ensure_ascii=False,
-                    indent=2,
                     sort_keys=True,
+                    separators=(",", ":"),
                     allow_nan=False,
                 )
                 handle.flush()
@@ -245,20 +245,25 @@ class LocalJsonRunStore:
             events = content.get("events", []) if isinstance(content, dict) else []
             if not isinstance(events, list):
                 events = []
-            numeric_sequences = [
-                item.get("sequence")
-                for item in events
-                if isinstance(item, dict) and isinstance(item.get("sequence"), int)
-            ]
+            supplied_sequence = event.get("sequence")
+            if supplied_sequence is None:
+                numeric_sequences = [
+                    item.get("sequence")
+                    for item in events
+                    if isinstance(item, dict) and isinstance(item.get("sequence"), int)
+                ]
+                default_sequence = max(numeric_sequences, default=0) + 1
+            else:
+                default_sequence = None
             payload = _prepare_event(
                 run_id,
                 event,
-                default_sequence=(max(numeric_sequences, default=0) + 1),
+                default_sequence=default_sequence,
             )
             events.append(payload)
             self._write(
                 path,
-                {"version": 1, "run_id": run_id, "events": _sort_events(events)},
+                {"version": 1, "run_id": run_id, "events": events},
             )
         return dict(payload)
 
@@ -294,6 +299,20 @@ class LocalJsonRunStore:
                 document
                 for document in documents
                 if str(document.get("date_key", "")) == str(date_key)
+            ]
+        return _sort_runs(documents)
+
+    def list_runs_by_statuses(self, statuses: set[str]) -> list[dict[str, Any]]:
+        """Return only runs whose normalized status is in ``statuses``."""
+        wanted = {str(status).strip().lower() for status in statuses if str(status).strip()}
+        if not wanted:
+            return []
+        with self._lock:
+            documents = [
+                dict(document)
+                for document in self._runs().values()
+                if isinstance(document, dict)
+                and str(document.get("status", "")).strip().lower() in wanted
             ]
         return _sort_runs(documents)
 
@@ -430,6 +449,31 @@ class FirestoreRunStore:
         except Exception as exc:
             self._disable("list_runs", exc)
             return self._local.list_runs(date_key)
+
+    def list_runs_by_statuses(self, statuses: set[str]) -> list[dict[str, Any]]:
+        """Query active-status documents without scanning the full history."""
+        wanted = sorted({str(status).strip().lower() for status in statuses if str(status).strip()})
+        if not wanted:
+            return []
+        if not self._active:
+            return self._local.list_runs_by_statuses(set(wanted))
+        try:
+            query = self._client.collection(self._collection_name)
+            try:
+                from google.cloud.firestore_v1.base_query import FieldFilter
+
+                query = query.where(filter=FieldFilter("status", "in", wanted))
+            except (ImportError, TypeError):
+                query = query.where("status", "in", wanted)
+            documents: list[dict[str, Any]] = []
+            for snapshot in query.stream():
+                payload = dict(_json_safe(snapshot.to_dict() or {}))
+                payload["run_id"] = payload.get("run_id") or snapshot.id
+                documents.append(payload)
+            return _sort_runs(documents)
+        except Exception as exc:
+            self._disable("list_runs_by_statuses", exc)
+            return self._local.list_runs_by_statuses(set(wanted))
 
     def get_events(self, run_id: str) -> list[dict[str, Any]]:
         run_id = _validate_id(run_id, label="run_id")

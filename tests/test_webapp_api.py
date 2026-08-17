@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import threading
 import time
 
@@ -47,6 +49,33 @@ def test_secret_redaction_preserves_non_secret_key_fields():
     assert value["OPENAI_API_KEY"] == "[REDACTED]"
 
 
+def test_secret_redaction_reuses_environment_snapshot(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_KEY", "environment-only-secret")
+
+    value = redact_secrets(
+        {"items": [{"message": "failed with environment-only-secret"} for _ in range(20)]}
+    )
+
+    assert all(item["message"] == "failed with [REDACTED]" for item in value["items"])
+
+
+def test_importing_web_runner_does_not_eagerly_import_trading_graph():
+    command = (
+        "import sys; import tradingagents.webapp.runner; "
+        "assert 'tradingagents.graph.trading_graph' not in sys.modules"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_safe_error_redacts_url_credentials_query_and_fragment():
     message = safe_error(
         RuntimeError(
@@ -72,6 +101,22 @@ def test_run_manager_reconciles_interrupted_run(tmp_path):
     assert run["current_phase"] == "Interrupted"
     assert "server stopped" in run["error"]
     assert store.get_events("stale-run")[-1]["type"] == "error"
+
+
+def test_reconciliation_uses_status_query_instead_of_full_history(monkeypatch, tmp_path):
+    store = LocalJsonRunStore(tmp_path)
+    store.create_run({"run_id": "finished-run", "status": "completed"})
+    store.create_run({"run_id": "stale-run", "status": "running"})
+
+    def fail_full_scan(_date_key=None):
+        raise AssertionError("startup must not scan all historical runs")
+
+    monkeypatch.setattr(store, "list_runs", fail_full_scan)
+
+    RunManager(store)
+
+    assert store.get_run("finished-run")["status"] == "completed"
+    assert store.get_run("stale-run")["status"] == "failed"
 
 
 def test_run_manager_can_disable_stale_run_reconciliation(monkeypatch, tmp_path):
@@ -198,6 +243,34 @@ def test_terminal_run_cache_expires_and_falls_back_to_persisted_data(monkeypatch
     assert run_id not in manager._cache_deadlines
     assert detail["status"] == "completed"
     assert detail["reports"]["market_report"] == "Persisted market report"
+
+
+def test_live_poll_uses_pre_sanitized_cache_without_reprocessing(monkeypatch, tmp_path):
+    manager = RunManager(LocalJsonRunStore(tmp_path))
+    run_id = "b" * 32
+    manager._live[run_id] = {
+        "run_id": run_id,
+        "status": "running",
+        "reports": {"market_report": "Safe cached report"},
+    }
+    manager._events[run_id] = [
+        {
+            "event_id": "safe-event",
+            "sequence": 1,
+            "created_at": "2026-08-17T00:00:00Z",
+            "message": "Safe cached event",
+        }
+    ]
+
+    def fail_reprocessing(_value):
+        raise AssertionError("live polling should not redact the full cache again")
+
+    monkeypatch.setattr(web_runner, "redact_secrets", fail_reprocessing)
+
+    detail = manager.get_run(run_id)
+
+    assert detail["reports"]["market_report"] == "Safe cached report"
+    assert detail["events"][0]["message"] == "Safe cached event"
 
 
 def test_web_api_returns_429_when_run_queue_is_full(monkeypatch, tmp_path):

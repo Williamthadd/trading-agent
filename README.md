@@ -194,6 +194,10 @@ app, enable both providers, create password users, and configure an email
 allowlist. There is intentionally no registration action in the dashboard.
 Use the header's **Text Size** slider to scale interface text from 85% to 160%;
 the browser remembers the selected size for the next session.
+For a no-Docker deployment on Render Free, use the included `render.yaml` and
+follow [`docs/RENDER_FREE_SETUP.md`](docs/RENDER_FREE_SETUP.md). It pins Python
+3.12, starts exactly one worker, and includes conservative settings for the
+512 MB / 0.1 CPU instance.
 The server binds to `127.0.0.1` by default. Do not expose it directly to the
 public internet without TLS and rate limiting. Firebase login protects the API,
 but authenticated users can still consume the configured market-data and LLM

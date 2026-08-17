@@ -1,0 +1,68 @@
+services:
+  - type: web
+    name: tradingagents-web
+    runtime: python
+    plan: free
+    region: singapore
+    numInstances: 1
+    buildCommand: python -m pip install --no-cache-dir ".[web]"
+    startCommand: python -m uvicorn tradingagents.webapp.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log
+    healthCheckPath: /api/health
+    buildFilter:
+      paths:
+        - .python-version
+        - pyproject.toml
+        - render.yaml
+        - cli/**
+        - tradingagents/**
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PIP_DISABLE_PIP_VERSION_CHECK
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
+      - key: NUMEXPR_NUM_THREADS
+        value: "1"
+      - key: WEB_RUN_QUEUE_LIMIT
+        value: "4"
+      - key: WEB_LIVE_CACHE_TTL_SECONDS
+        value: "0"
+      - key: WEB_RECONCILE_STALE_RUNS
+        value: "true"
+      - key: WEB_LOCAL_DATA_DIR
+        value: /tmp/tradingagents/web-history
+      - key: TRADINGAGENTS_RESULTS_DIR
+        value: /tmp/tradingagents/results
+      - key: TRADINGAGENTS_CACHE_DIR
+        value: /tmp/tradingagents/cache
+      - key: TRADINGAGENTS_MEMORY_LOG_PATH
+        value: /tmp/tradingagents/memory/trading_memory.md
+      - key: FIREBASE_ENABLED
+        value: "true"
+      - key: FIREBASE_CREDENTIALS_PATH
+        value: /etc/secrets/firebase-service-account.json
+      - key: FIREBASE_DATABASE_ID
+        value: "(default)"
+      - key: FIREBASE_COLLECTION
+        value: trading_runs
+      - key: WEB_AUTH_REQUIRED
+        value: "true"
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_WEB_API_KEY
+        sync: false
+      - key: FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: FIREBASE_WEB_APP_ID
+        sync: false
+      - key: WEB_AUTH_ALLOWED_EMAILS
+        sync: false

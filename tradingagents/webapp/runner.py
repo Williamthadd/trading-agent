@@ -16,7 +16,6 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 
 from .models import RunRequest
@@ -149,8 +148,8 @@ def _redact_url_auth(match: re.Match[str]) -> str:
         return "[REDACTED_URL]" + trailing
 
 
-def redact_secrets(value: Any) -> Any:
-    """Recursively remove common credentials before browser/storage exposure."""
+def _redact_secrets(value: Any, sensitive_environment_values: tuple[str, ...]) -> Any:
+    """Recursive implementation sharing one environment-secret snapshot."""
     if isinstance(value, dict):
         cleaned = {}
         for key, item in value.items():
@@ -158,23 +157,38 @@ def redact_secrets(value: Any) -> Any:
             if _is_sensitive_field(key_text):
                 cleaned[key_text] = "[REDACTED]"
             else:
-                cleaned[key_text] = redact_secrets(item)
+                cleaned[key_text] = _redact_secrets(item, sensitive_environment_values)
         return cleaned
     if isinstance(value, (list, tuple, set)):
-        return [redact_secrets(item) for item in value]
+        return [_redact_secrets(item, sensitive_environment_values) for item in value]
     if value is None or isinstance(value, (bool, int, float)):
         return value
 
     text = str(value)
     # Exact replacement catches credentials embedded in provider exception URLs.
-    for name, secret in os.environ.items():
-        if secret and len(secret) >= 6 and _is_sensitive_field(name):
-            text = text.replace(secret, "[REDACTED]")
+    for secret in sensitive_environment_values:
+        text = text.replace(secret, "[REDACTED]")
     text = _SECRET_KEY_RE.sub(r"\1\2[REDACTED]", text)
     text = _BEARER_RE.sub("Bearer [REDACTED]", text)
     text = _OPENAI_KEY_RE.sub("[REDACTED]", text)
     text = _GOOGLE_KEY_RE.sub("[REDACTED]", text)
     return _HTTP_URL_RE.sub(_redact_url_auth, text)
+
+
+def redact_secrets(value: Any) -> Any:
+    """Recursively remove common credentials before browser/storage exposure.
+
+    Environment variables are inspected once per payload instead of once for
+    every scalar field. Large polling responses can contain thousands of
+    fields, so this avoids repeated process-environment scans without changing
+    the redaction rules.
+    """
+    sensitive_environment_values = tuple(
+        secret
+        for name, secret in os.environ.items()
+        if secret and len(secret) >= 6 and _is_sensitive_field(name)
+    )
+    return _redact_secrets(value, sensitive_environment_values)
 
 
 def safe_error(exc: BaseException) -> str:
@@ -337,13 +351,21 @@ class RunManager:
         if enabled not in {"1", "true", "yes", "on"}:
             raise RuntimeConfigurationError("WEB_RECONCILE_STALE_RUNS must be true or false")
 
+        stale_statuses = {"queued", "running", "pending", "processing", "in_progress"}
         try:
-            runs = self.store.list_runs(None)
+            # Firestore histories can grow indefinitely. Stores that support a
+            # status query should fetch only abandoned work instead of loading
+            # every completed run during each cold start.
+            list_by_statuses = getattr(self.store, "list_runs_by_statuses", None)
+            runs = (
+                list_by_statuses(stale_statuses)
+                if callable(list_by_statuses)
+                else self.store.list_runs(None)
+            )
         except Exception as exc:  # startup should survive a transient store failure
             LOGGER.warning("Could not reconcile prior web runs: %s", safe_error(exc))
             return
 
-        stale_statuses = {"queued", "running", "pending", "processing", "in_progress"}
         for record in runs or []:
             if not isinstance(record, dict) or record.get("status") not in stale_statuses:
                 continue
@@ -527,25 +549,28 @@ class RunManager:
             live_events = copy.deepcopy(self._events.get(run_id, []))
 
         if live is not None:
-            stored = None
-            stored_events = []
-        else:
-            try:
-                stored = self.store.get_run(run_id)
-                stored_events = self.store.get_events(run_id) if stored else []
-            except Exception as exc:
-                raise RunStoreUnavailable(safe_error(exc)) from exc
-        if stored is None and live is None:
+            # Live records and events are sanitized before entering the cache.
+            # Avoid recursively redacting, de-duplicating, and reconstructing
+            # the entire growing response on every 1.6-second browser poll.
+            live["events"] = sorted(
+                live_events,
+                key=lambda event: (event.get("sequence", 0), event.get("created_at", "")),
+            )
+            return live
+
+        try:
+            stored = self.store.get_run(run_id)
+            stored_events = self.store.get_events(run_id) if stored else []
+        except Exception as exc:
+            raise RunStoreUnavailable(safe_error(exc)) from exc
+        if stored is None:
             return None
 
         record: dict[str, Any] = {}
         if isinstance(stored, dict):
             record.update(redact_secrets(stored))
-        if live:
-            record.update(redact_secrets(live))
-
         events_by_id: dict[str, dict[str, Any]] = {}
-        for event in [*(stored_events or []), *live_events]:
+        for event in stored_events or []:
             if not isinstance(event, dict):
                 continue
             event = redact_secrets(event)
@@ -628,6 +653,11 @@ class RunManager:
                 self._threads.pop(run_id, None)
 
     def _execute_graph(self, run_id: str, request: RunRequest) -> None:
+        # Importing the trading graph pulls in pandas, LangChain, and every
+        # agent definition. Keep the idle web/login process lean and pay that
+        # cost only when a user actually starts an analysis.
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
         config = build_graph_config(request)
         graph = TradingAgentsGraph(
             selected_analysts=request.analysts,
@@ -689,11 +719,13 @@ class RunManager:
             final_trade_decision=final_decision,
         )
         decision = graph.process_signal(final_decision)
+        safe_decision = redact_secrets(decision)
+        safe_final_decision = _bounded_text(final_decision, 200_000)
         with self._lock:
             record = self._live[run_id]
-            record["decision"] = decision
-            record["reports"]["final_trade_decision"] = final_decision
-        self._update(run_id, decision=decision)
+            record["decision"] = safe_decision
+            record["reports"]["final_trade_decision"] = safe_final_decision
+        self._update(run_id, decision=safe_decision)
 
     def _process_messages(
         self,
@@ -786,10 +818,11 @@ class RunManager:
         if not changed:
             return
         previous_reports.update(changed)
+        bounded_changed = {key: _bounded_text(value, 200_000) for key, value in changed.items()}
         with self._lock:
-            self._live[run_id]["reports"].update(changed)
+            self._live[run_id]["reports"].update(bounded_changed)
 
-        for report_key, content in changed.items():
+        for report_key, content in bounded_changed.items():
             agent, label = REPORT_SPECS[report_key]
             self._emit(
                 run_id,
@@ -800,7 +833,7 @@ class RunManager:
                 report_key=report_key,
                 # Firestore documents are capped at 1 MiB. At four UTF-8 bytes
                 # per character, 200k leaves room for metadata and field names.
-                content=_bounded_text(content, 200_000),
+                content=content,
             )
 
         status_updates: dict[str, str] = {}

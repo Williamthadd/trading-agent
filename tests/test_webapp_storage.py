@@ -21,6 +21,8 @@ def test_local_run_store_persists_runs_and_orders_events(tmp_path):
     assert [event["text"] for event in store.get_events("run-001")] == ["A", "B"]
     assert [run["run_id"] for run in store.list_runs("2026-08-15")] == ["run-001"]
     assert store.list_runs("2026-08-14") == []
+    assert store.list_runs_by_statuses({"completed"})[0]["run_id"] == "run-001"
+    assert store.list_runs_by_statuses({"running"}) == []
 
     reloaded = LocalJsonRunStore(tmp_path)
     assert reloaded.get_run("run-001")["status"] == "completed"
