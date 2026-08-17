@@ -203,6 +203,7 @@ def test_terminal_run_cache_expires_and_falls_back_to_persisted_data(monkeypatch
 def test_web_api_returns_429_when_run_queue_is_full(monkeypatch, tmp_path):
     monkeypatch.setenv("WEB_RUN_QUEUE_LIMIT", "1")
     monkeypatch.setenv("WEB_HOST", "127.0.0.1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
 
     from tradingagents.webapp.main import create_app
 
@@ -218,7 +219,7 @@ def test_web_api_returns_429_when_run_queue_is_full(monkeypatch, tmp_path):
             "analysis_date": "2025-08-15",
             "analysts": ["market"],
             "research_depth": 1,
-            "llm_provider": "ollama",
+            "llm_provider": "google",
             "quick_model": "test-fast",
             "deep_model": "test-deep",
         },
@@ -282,10 +283,9 @@ def test_openai_compatible_uses_hidden_server_url_without_browser_leak(monkeypat
 
     from tradingagents.webapp.main import _provider_options
 
-    provider = next(item for item in _provider_options() if item["id"] == "openai_compatible")
-    assert provider["backend_url"] is None
-    assert provider["requires_backend_url"] is False
-    assert "secret" not in repr(provider)
+    providers = _provider_options()
+    assert [provider["id"] for provider in providers] == ["google"]
+    assert "secret" not in repr(providers)
 
 
 def test_openai_compatible_without_any_endpoint_fails_at_runtime(monkeypatch, tmp_path):
@@ -379,6 +379,7 @@ def test_thread_start_failure_marks_persisted_run_failed(monkeypatch, tmp_path):
 def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path):
     monkeypatch.setenv("FIREBASE_ENABLED", "false")
     monkeypatch.setenv("WEB_LOCAL_DATA_DIR", str(tmp_path / "implicit-store"))
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
     monkeypatch.setattr(RunManager, "_execute_graph", _fake_execute_graph)
 
     # Import after WEB_LOCAL_DATA_DIR is isolated because the module also exports
@@ -399,9 +400,12 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     options = client.get("/api/options")
     assert options.status_code == 200
     providers = {provider["id"]: provider for provider in options.json()["providers"]}
-    assert "google" in providers
-    assert providers["openai_compatible"]["requires_backend_url"] is True
-    assert providers["azure"]["supports_backend_url"] is False
+    assert list(providers) == ["google"]
+    assert providers["google"]["label"] == "Google Gemini"
+    assert providers["google"]["supports_backend_url"] is False
+    assert options.json()["defaults"]["llm_provider"] == "google"
+    assert options.json()["defaults"]["quick_model"].startswith("gemini-")
+    assert options.json()["defaults"]["deep_model"].startswith("gemini-")
 
     response = client.post(
         "/api/runs",
@@ -411,10 +415,10 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
             "output_language": "Bahasa Indonesia",
             "analysts": ["market"],
             "research_depth": 1,
-            "llm_provider": "ollama",
+            "llm_provider": "google",
             "quick_model": "test-fast",
             "deep_model": "test-deep",
-            "backend_url": "http://localhost:11434/v1",
+            "thinking_level": "minimal",
         },
     )
     assert response.status_code == 202
@@ -450,3 +454,32 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     index = client.get("/")
     assert index.status_code == 200
     assert "TRADING" in index.text and "AGENTS" in index.text
+
+
+def test_web_api_rejects_non_google_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+    from tradingagents.webapp.main import create_app
+
+    store = LocalJsonRunStore(tmp_path)
+    client = TestClient(create_app(store, auth_required=False))
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "ticker": "AAPL",
+            "analysis_date": "2025-08-15",
+            "analysts": ["market"],
+            "research_depth": 1,
+            "llm_provider": "ollama",
+            "quick_model": "test-fast",
+            "deep_model": "test-deep",
+            "backend_url": "http://localhost:11434/v1",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "The web dashboard supports only the Google Gemini provider."
+    )
+    assert store.list_runs() == []

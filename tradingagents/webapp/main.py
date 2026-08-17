@@ -26,7 +26,6 @@ from .runner import (
     RunQueueFull,
     RunStoreUnavailable,
     RuntimeConfigurationError,
-    configured_backend_url,
 )
 from .storage import build_run_store
 
@@ -49,51 +48,9 @@ def _public_backend_url(value: Any) -> str | None:
     return candidate
 
 
+WEB_LLM_PROVIDER = "google"
 PROVIDERS: tuple[dict[str, Any], ...] = (
-    {"id": "openai", "label": "OpenAI", "backend_url": "https://api.openai.com/v1"},
-    {"id": "google", "label": "Google Gemini", "backend_url": None},
-    {"id": "anthropic", "label": "Anthropic Claude", "backend_url": "https://api.anthropic.com"},
-    {"id": "xai", "label": "xAI", "backend_url": "https://api.x.ai/v1"},
-    {"id": "deepseek", "label": "DeepSeek", "backend_url": "https://api.deepseek.com"},
-    {
-        "id": "qwen",
-        "label": "Qwen (International)",
-        "backend_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    },
-    {
-        "id": "qwen-cn",
-        "label": "Qwen (China)",
-        "backend_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    },
-    {
-        "id": "glm",
-        "label": "GLM / Z.AI (International)",
-        "backend_url": "https://api.z.ai/api/paas/v4",
-    },
-    {
-        "id": "glm-cn",
-        "label": "GLM / BigModel (China)",
-        "backend_url": "https://open.bigmodel.cn/api/paas/v4",
-    },
-    {"id": "minimax", "label": "MiniMax (Global)", "backend_url": "https://api.minimax.io/v1"},
-    {"id": "minimax-cn", "label": "MiniMax (China)", "backend_url": "https://api.minimaxi.com/v1"},
-    {"id": "openrouter", "label": "OpenRouter", "backend_url": "https://openrouter.ai/api/v1"},
-    {"id": "mistral", "label": "Mistral", "backend_url": "https://api.mistral.ai/v1"},
-    {"id": "kimi", "label": "Kimi (Moonshot)", "backend_url": "https://api.moonshot.ai/v1"},
-    {"id": "groq", "label": "Groq", "backend_url": "https://api.groq.com/openai/v1"},
-    {"id": "nvidia", "label": "NVIDIA NIM", "backend_url": "https://integrate.api.nvidia.com/v1"},
-    {"id": "azure", "label": "Azure OpenAI", "backend_url": None},
-    {"id": "bedrock", "label": "Amazon Bedrock", "backend_url": None},
-    {
-        "id": "ollama",
-        "label": "Ollama",
-        "backend_url": _public_backend_url(configured_backend_url("ollama")),
-    },
-    {
-        "id": "openai_compatible",
-        "label": "OpenAI-compatible endpoint",
-        "backend_url": _public_backend_url(configured_backend_url("openai_compatible")),
-    },
+    {"id": WEB_LLM_PROVIDER, "label": "Google Gemini", "backend_url": None},
 )
 
 ANALYST_LABELS = {
@@ -145,28 +102,6 @@ def _thinking_control(provider: str) -> dict[str, Any] | None:
                 {"id": "minimal", "label": "Minimal / Disable Thinking"},
             ],
         }
-    if provider == "openai":
-        return {
-            "key": "reasoning_effort",
-            "label": "Reasoning Effort",
-            "default": "medium",
-            "options": [
-                {"id": "low", "label": "Low"},
-                {"id": "medium", "label": "Medium"},
-                {"id": "high", "label": "High"},
-            ],
-        }
-    if provider == "anthropic":
-        return {
-            "key": "anthropic_effort",
-            "label": "Claude Effort",
-            "default": "high",
-            "options": [
-                {"id": "low", "label": "Low"},
-                {"id": "medium", "label": "Medium"},
-                {"id": "high", "label": "High"},
-            ],
-        }
     return None
 
 
@@ -174,24 +109,12 @@ def _provider_options() -> list[dict[str, Any]]:
     result = []
     for spec in PROVIDERS:
         provider = spec["id"]
-        configured_url = (
-            configured_backend_url(provider)
-            if provider in {"ollama", "openai_compatible"}
-            else None
-        )
         item = {
             **spec,
-            "backend_url": (
-                _public_backend_url(configured_url)
-                if provider in {"ollama", "openai_compatible"}
-                else spec.get("backend_url")
-            ),
             "quick_models": _model_options(provider, "quick"),
             "deep_models": _model_options(provider, "deep"),
-            # Hosted-provider endpoint overrides belong to the server config.
-            # Only explicitly custom/local runtimes accept a URL per request.
-            "supports_backend_url": provider in {"ollama", "openai_compatible"},
-            "requires_backend_url": provider == "openai_compatible" and not configured_url,
+            "supports_backend_url": False,
+            "requires_backend_url": False,
         }
         control = _thinking_control(provider)
         if control:
@@ -204,21 +127,19 @@ def _defaults() -> dict[str, Any]:
     depth = DEFAULT_CONFIG.get("max_debate_rounds", 1)
     if depth not in RESEARCH_DEPTHS:
         depth = 1
-    provider = str(DEFAULT_CONFIG.get("llm_provider", "openai")).lower()
+    google_models = MODEL_OPTIONS[WEB_LLM_PROVIDER]
     defaults = {
         "ticker": "SPY",
         "analysis_date": date_type.today().isoformat(),
         "output_language": DEFAULT_CONFIG.get("output_language", "English"),
         "analysts": list(ANALYSTS),
         "research_depth": depth,
-        "llm_provider": provider,
-        "quick_model": DEFAULT_CONFIG.get("quick_think_llm", "gpt-5.4-mini"),
-        "deep_model": DEFAULT_CONFIG.get("deep_think_llm", "gpt-5.5"),
+        "llm_provider": WEB_LLM_PROVIDER,
+        "quick_model": google_models["quick"][0][1],
+        "deep_model": google_models["deep"][0][1],
         # A server-side provider override must not be disclosed to the browser.
         "backend_url": None,
         "thinking_level": DEFAULT_CONFIG.get("google_thinking_level"),
-        "reasoning_effort": DEFAULT_CONFIG.get("openai_reasoning_effort"),
-        "anthropic_effort": DEFAULT_CONFIG.get("anthropic_effort"),
     }
     return defaults
 
@@ -319,6 +240,11 @@ def create_app(
         request: RunRequest,
         _user: Annotated[dict[str, Any], Depends(require_user)],
     ) -> dict[str, Any]:
+        if request.llm_provider != WEB_LLM_PROVIDER:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="The web dashboard supports only the Google Gemini provider.",
+            )
         try:
             return manager.start_run(request)
         except RuntimeConfigurationError as exc:

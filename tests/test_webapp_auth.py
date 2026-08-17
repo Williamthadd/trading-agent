@@ -5,6 +5,7 @@ from tradingagents.webapp.storage import LocalJsonRunStore
 
 
 def _set_client_config(monkeypatch):
+    monkeypatch.delenv("WEB_AUTH_ALLOWED_EMAILS", raising=False)
     monkeypatch.setenv("FIREBASE_WEB_API_KEY", "public-web-api-key")
     monkeypatch.setenv("FIREBASE_AUTH_DOMAIN", "tradingagents-test.firebaseapp.com")
     monkeypatch.setenv("FIREBASE_PROJECT_ID", "tradingagents-test")

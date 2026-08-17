@@ -179,9 +179,10 @@ pip install -e ".[web]"
 tradingagents-web
 ```
 
-Then open `http://127.0.0.1:8000`. The dashboard exposes the same analysis,
-provider, model, and research-depth choices as the CLI, streams each agent's
-progress, and groups completed runs by the day each run was created. It works
+Then open `http://127.0.0.1:8000`. The dashboard uses Google Gemini exclusively,
+offers Gemini model and research-depth choices, streams each agent's progress,
+and groups completed runs by the day each run was created. The CLI and Python
+library retain their broader provider integrations. The dashboard works
 immediately with local JSON persistence; to save runs in Cloud Firestore, follow
 [`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md). Keep all LLM API keys and
 Firebase service-account credentials in `.env`/`secrets` on the server only.
