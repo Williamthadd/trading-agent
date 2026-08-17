@@ -81,7 +81,7 @@ def test_server_email_allowlist_rejects_other_valid_firebase_users(monkeypatch, 
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Akun ini tidak diizinkan mengakses TradingAgents."
+    assert response.json()["detail"] == ("This account is not authorized to access TradingAgents.")
 
 
 def test_authentication_can_be_explicitly_disabled_for_local_development(tmp_path):

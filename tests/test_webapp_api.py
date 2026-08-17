@@ -454,6 +454,13 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     index = client.get("/")
     assert index.status_code == 200
     assert "TRADING" in index.text and "AGENTS" in index.text
+    assert index.text.count('src="/logo.png"') == 2
+    assert '<link rel="icon" type="image/png" href="/logo.png">' in index.text
+
+    logo = client.get("/logo.png")
+    assert logo.status_code == 200
+    assert logo.headers["content-type"] == "image/png"
+    assert logo.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_web_api_rejects_non_google_provider(monkeypatch, tmp_path):

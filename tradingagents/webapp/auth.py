@@ -101,14 +101,14 @@ class FirebaseAuthManager:
             return {"uid": "local-development", "email": None, "auth_disabled": True}
         if self._missing:
             raise AuthenticationConfigurationError(
-                "Firebase Authentication belum dikonfigurasi lengkap pada server."
+                "Firebase Authentication is not fully configured on the server."
             )
         if not authorization:
-            raise InvalidAuthenticationToken("Login diperlukan untuk mengakses resource ini.")
+            raise InvalidAuthenticationToken("Authentication is required to access this resource.")
 
         scheme, separator, token = authorization.strip().partition(" ")
         if not separator or scheme.casefold() != "bearer" or not token.strip():
-            raise InvalidAuthenticationToken("Authorization header harus menggunakan Bearer token.")
+            raise InvalidAuthenticationToken("The Authorization header must use a Bearer token.")
 
         try:
             claims = dict(self._verifier()(token.strip()))
@@ -116,16 +116,16 @@ class FirebaseAuthManager:
             raise
         except Exception as exc:
             raise InvalidAuthenticationToken(
-                "Sesi Firebase tidak valid atau sudah kedaluwarsa. Silakan login kembali."
+                "The Firebase session is invalid or has expired. Please sign in again."
             ) from exc
 
         uid = str(claims.get("uid") or claims.get("sub") or "").strip()
         if not uid:
-            raise InvalidAuthenticationToken("Firebase ID token tidak memiliki user ID.")
+            raise InvalidAuthenticationToken("The Firebase ID token does not contain a user ID.")
         email_value = claims.get("email")
         email = str(email_value).strip() if email_value else None
         if self._allowed and (not email or email.casefold() not in self._allowed):
-            raise AuthenticationForbidden("Akun ini tidak diizinkan mengakses TradingAgents.")
+            raise AuthenticationForbidden("This account is not authorized to access TradingAgents.")
 
         return {
             "uid": uid,
@@ -147,12 +147,12 @@ class FirebaseAuthManager:
         )
         if not credential_value:
             raise AuthenticationConfigurationError(
-                "FIREBASE_CREDENTIALS_PATH diperlukan untuk memverifikasi login."
+                "FIREBASE_CREDENTIALS_PATH is required to verify authentication."
             )
         credential_path = Path(credential_value).expanduser().resolve()
         if not credential_path.is_file():
             raise AuthenticationConfigurationError(
-                "Firebase service-account file tidak ditemukan pada server."
+                "The Firebase service-account file was not found on the server."
             )
 
         try:
@@ -183,7 +183,7 @@ class FirebaseAuthManager:
             raise
         except Exception as exc:
             raise AuthenticationConfigurationError(
-                "Firebase Admin SDK gagal diinisialisasi untuk Authentication."
+                "Firebase Admin SDK failed to initialize for Authentication."
             ) from exc
 
 
