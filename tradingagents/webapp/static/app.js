@@ -1,3 +1,5 @@
+import { getAuthToken, initializeAuthentication, invalidateAuthentication } from "./auth.js";
+
 (function () {
   "use strict";
 
@@ -26,6 +28,7 @@
     activeTab: "live",
     decisionText: "",
     reportsText: "",
+    workspaceInitialized: false,
   };
 
   const dom = {};
@@ -35,8 +38,17 @@
   function init() {
     cacheDom();
     initializeTextSizeControl();
-    bindEvents();
     startClock();
+
+    initializeAuthentication({
+      onAuthenticated: initializeWorkspace,
+    });
+  }
+
+  function initializeWorkspace() {
+    if (state.workspaceInitialized) return;
+    state.workspaceInitialized = true;
+    bindEvents();
 
     const today = toLocalISODate(new Date());
     dom.analysisDate.value = today;
@@ -1498,6 +1510,10 @@
     if (requestOptions.body) {
       requestOptions.headers["Content-Type"] = "application/json";
     }
+    const token = await getAuthToken();
+    if (token) {
+      requestOptions.headers["Authorization"] = "Bearer " + token;
+    }
 
     let response;
     try {
@@ -1519,6 +1535,9 @@
       }
     }
 
+    if (response.status === 401) {
+      await invalidateAuthentication("Your session is invalid or expired. Please login again.");
+    }
     if (!response.ok) {
       const detail = isPlainObject(data)
         ? data.detail || data.error || data.message

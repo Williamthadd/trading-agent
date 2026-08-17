@@ -21,12 +21,64 @@
     })();
   </script>
   <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#workspace">Skip to analysis workspace</a>
+  <section class="auth-shell" id="auth-shell" aria-labelledby="login-title">
+    <div class="auth-grid" aria-hidden="true"></div>
+    <main class="auth-card">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">TA</span>
+        <div>
+          <p class="eyebrow">SECURE MARKET INTELLIGENCE</p>
+          <h1>TRADING<span>AGENTS</span></h1>
+        </div>
+      </div>
 
-  <div class="app-shell">
+      <div class="auth-status-line">
+        <span class="status-dot" id="auth-status-dot" aria-hidden="true"></span>
+        <span id="auth-status-text">INITIALIZING FIREBASE AUTH</span>
+      </div>
+
+      <div class="auth-heading">
+        <span class="panel-code">ACCESS // 01</span>
+        <h2 id="login-title">Sign in to workstation</h2>
+        <p>Authentication is required before market analysis and Firestore history can be accessed.</p>
+      </div>
+
+      <button class="google-login-button" id="google-login-button" type="button" disabled>
+        <span class="google-mark" aria-hidden="true">G</span>
+        <span>CONTINUE WITH GOOGLE</span>
+      </button>
+
+      <div class="auth-divider"><span>OR USE EMAIL</span></div>
+
+      <form class="login-form" id="login-form" novalidate>
+        <div class="field-group">
+          <label for="login-email">Email address</label>
+          <input id="login-email" name="email" type="email" autocomplete="username"
+                 inputmode="email" required placeholder="analyst@example.com" disabled>
+        </div>
+        <div class="field-group">
+          <label for="login-password">Password</label>
+          <input id="login-password" name="password" type="password"
+                 autocomplete="current-password" minlength="6" required
+                 placeholder="Enter your password" disabled>
+        </div>
+        <div class="auth-error" id="auth-error" role="alert" aria-live="assertive" hidden></div>
+        <button class="email-login-button" id="email-login-button" type="submit" disabled>
+          <span>LOGIN TO TERMINAL</span>
+          <span aria-hidden="true">→</span>
+        </button>
+      </form>
+
+      <p class="login-policy">LOGIN ONLY · ACCOUNTS ARE MANAGED BY THE FIREBASE ADMINISTRATOR</p>
+    </main>
+  </section>
+
+  <a class="skip-link" id="workspace-skip-link" href="#workspace" hidden>Skip to analysis workspace</a>
+
+  <div class="app-shell" id="app-shell" hidden>
     <header class="terminal-header">
       <div class="brand-block" aria-label="TradingAgents">
         <span class="brand-mark" aria-hidden="true">TA</span>
@@ -60,6 +112,11 @@
           <input id="text-size-range" class="text-size-range" type="range"
                  min="85" max="160" step="5" value="110"
                  aria-label="Global interface text size" aria-describedby="text-size-value">
+        </div>
+        <div class="strip-cell account-cell">
+          <span class="strip-label">SIGNED IN</span>
+          <strong id="auth-user-email">—</strong>
+          <button class="logout-button" id="logout-button" type="button">LOGOUT</button>
         </div>
         <div class="strip-cell clock-cell">
           <span class="strip-label" id="clock-date">---</span>

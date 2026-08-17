@@ -207,7 +207,7 @@ def test_web_api_returns_429_when_run_queue_is_full(monkeypatch, tmp_path):
     from tradingagents.webapp.main import create_app
 
     store = LocalJsonRunStore(tmp_path)
-    app = create_app(store)
+    app = create_app(store, auth_required=False)
     app.state.run_manager._live["occupied"] = {"status": "running"}
     client = TestClient(app)
 
@@ -390,7 +390,7 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     assert _public_backend_url("https://example.com/v1?api_key=secret") is None
 
     store = LocalJsonRunStore(tmp_path / "api-store")
-    client = TestClient(create_app(store))
+    client = TestClient(create_app(store, auth_required=False))
 
     health = client.get("/api/health")
     assert health.status_code == 200

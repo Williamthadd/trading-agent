@@ -1,20 +1,25 @@
 """FastAPI entry point for the TradingAgents browser application."""
 
-from __future__ import annotations
-
 import os
 from datetime import date as date_type
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Path as ApiPath, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Path as ApiPath, Query, status
 from fastapi.staticfiles import StaticFiles
 
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients.model_catalog import MODEL_OPTIONS
 
 from . import __version__
+from .auth import (
+    AuthenticationConfigurationError,
+    AuthenticationForbidden,
+    FirebaseAuthManager,
+    InvalidAuthenticationToken,
+    TokenVerifier,
+)
 from .models import ANALYSTS, RESEARCH_DEPTHS, HealthResponse, RunRequest
 from .runner import (
     RunManager,
@@ -230,9 +235,15 @@ def _valid_date(value: str | None) -> str | None:
         ) from exc
 
 
-def create_app(store: Any | None = None) -> FastAPI:
+def create_app(
+    store: Any | None = None,
+    *,
+    auth_required: bool | None = None,
+    token_verifier: TokenVerifier | None = None,
+) -> FastAPI:
     run_store = store or build_run_store()
     manager = RunManager(run_store)
+    auth_manager = FirebaseAuthManager(required=auth_required, token_verifier=token_verifier)
     api = FastAPI(
         title="TradingAgents Web Terminal",
         description="Browser interface and polling API for the TradingAgents graph.",
@@ -242,6 +253,24 @@ def create_app(store: Any | None = None) -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     api.state.run_manager = manager
+    api.state.auth_manager = auth_manager
+
+    def require_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        try:
+            return auth_manager.authenticate(authorization)
+        except InvalidAuthenticationToken as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(exc),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+        except AuthenticationForbidden as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        except AuthenticationConfigurationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
 
     @api.get("/api/health", response_model=HealthResponse, tags=["system"])
     def health() -> dict[str, Any]:
@@ -253,8 +282,16 @@ def create_app(store: Any | None = None) -> FastAPI:
             "active_runs": manager.active_count,
         }
 
+    @api.get("/api/auth/config", tags=["authentication"])
+    def auth_config() -> dict[str, Any]:
+        return auth_manager.public_config
+
+    @api.get("/api/auth/session", tags=["authentication"])
+    def auth_session(user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[str, Any]:
+        return {"authenticated": True, "user": user}
+
     @api.get("/api/options", tags=["system"])
-    def options() -> dict[str, Any]:
+    def options(_user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[str, Any]:
         languages = [{"id": value, "label": label} for value, label in OUTPUT_LANGUAGES]
         return {
             "analysts": [{"id": analyst, "label": ANALYST_LABELS[analyst]} for analyst in ANALYSTS],
@@ -278,7 +315,10 @@ def create_app(store: Any | None = None) -> FastAPI:
         }
 
     @api.post("/api/runs", status_code=status.HTTP_202_ACCEPTED, tags=["runs"])
-    def create_run(request: RunRequest) -> dict[str, Any]:
+    def create_run(
+        request: RunRequest,
+        _user: Annotated[dict[str, Any], Depends(require_user)],
+    ) -> dict[str, Any]:
         try:
             return manager.start_run(request)
         except RuntimeConfigurationError as exc:
@@ -300,6 +340,7 @@ def create_app(store: Any | None = None) -> FastAPI:
 
     @api.get("/api/runs/{run_id}", tags=["runs"])
     def get_run(
+        _user: Annotated[dict[str, Any], Depends(require_user)],
         run_id: str = ApiPath(pattern=r"^[a-f0-9]{32}$"),
     ) -> dict[str, Any]:
         try:
@@ -315,6 +356,7 @@ def create_app(store: Any | None = None) -> FastAPI:
 
     @api.get("/api/history", tags=["history"])
     def history(
+        _user: Annotated[dict[str, Any], Depends(require_user)],
         date: str | None = Query(default=None, description="Creation day in YYYY-MM-DD"),
     ) -> dict[str, Any]:
         date_key = _valid_date(date)
@@ -329,9 +371,10 @@ def create_app(store: Any | None = None) -> FastAPI:
 
     @api.get("/api/history/{run_id}", tags=["history"])
     def history_detail(
+        _user: Annotated[dict[str, Any], Depends(require_user)],
         run_id: str = ApiPath(pattern=r"^[a-f0-9]{32}$"),
     ) -> dict[str, Any]:
-        return get_run(run_id)
+        return get_run(_user, run_id)
 
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.is_dir():

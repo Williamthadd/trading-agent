@@ -5,6 +5,12 @@ server valid tersedia. Jika Firebase belum disiapkan atau gagal diakses, UI
 tetap berjalan dan otomatis memakai JSON lokal di
 `~/.tradingagents/web_history` (atau lokasi `WEB_LOCAL_DATA_DIR`).
 
+Dashboard juga mewajibkan Firebase Authentication sebelum options, analisis,
+respons agent, atau history dapat diakses. Setelah database dan service account
+di dokumen ini siap, lanjutkan ke
+[`FIREBASE_AUTH_SETUP.md`](FIREBASE_AUTH_SETUP.md) untuk mengaktifkan login
+Google dan email/password.
+
 Arsitektur datanya:
 
 ```text
@@ -212,8 +218,11 @@ error network, database, atau IAM tidak tersembunyi oleh lazy client:
 
 ```powershell
 @'
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+
+# Beri path eksplisit karena script dijalankan melalui stdin (`python -`).
+load_dotenv(dotenv_path=Path.cwd() / ".env")
 
 from tradingagents.webapp.storage import build_run_store
 
@@ -230,12 +239,13 @@ UI berdasarkan `date_key`.
 
 ## Keamanan dan biaya
 
-- Browser hanya berbicara dengan backend TradingAgents; browser tidak menerima
-  Firebase config maupun service-account key.
-- Pertahankan `WEB_HOST=127.0.0.1` untuk pemakaian lokal. API web ini tidak
-  menyediakan login pengguna; sebelum mengeksposnya ke jaringan bersama atau
-  internet, pasang reverse proxy dengan TLS, autentikasi, dan rate limiting agar
-  pihak lain tidak dapat memakai API key maupun kuota LLM Anda.
+- Browser hanya berbicara dengan backend TradingAgents untuk data aplikasi dan
+  Firestore. Browser menerima Firebase **Web App config** (identifier publik)
+  untuk login, tetapi tidak pernah menerima service-account key, API key LLM,
+  atau akses Firestore langsung.
+- API memverifikasi Firebase ID token sebelum mengizinkan options, run, polling,
+  dan history. Tetap gunakan TLS dan rate limiting saat diekspos ke jaringan;
+  login tidak membatasi seberapa banyak kuota LLM yang dapat dipakai akun sah.
 - Backend web menjalankan analisis secara serial dan membatasi antrean melalui
   `WEB_RUN_QUEUE_LIMIT` (default `4`). Rekonsiliasi startup default mengasumsikan
   hanya satu instance server. Jika beberapa instance sengaja memakai Firestore

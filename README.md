@@ -185,12 +185,18 @@ progress, and groups completed runs by the day each run was created. It works
 immediately with local JSON persistence; to save runs in Cloud Firestore, follow
 [`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md). Keep all LLM API keys and
 Firebase service-account credentials in `.env`/`secrets` on the server only.
+Firebase Authentication is required by default: users must pass the login page
+with Google or an existing email/password account before the backend permits
+options, analysis runs, agent responses, or Firestore-backed history. Follow
+[`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md) to register the web
+app, enable both providers, create password users, and configure an email
+allowlist. There is intentionally no registration action in the dashboard.
 Use the header's **Text Size** slider to scale interface text from 85% to 160%;
 the browser remembers the selected size for the next session.
 The server binds to `127.0.0.1` by default. Do not expose it directly to the
-public internet: the run endpoints intentionally have no user authentication
-and can consume the configured market-data and LLM quotas. Put authentication,
-TLS, and rate limiting in front of it before any shared deployment.
+public internet without TLS and rate limiting. Firebase login protects the API,
+but authenticated users can still consume the configured market-data and LLM
+quotas.
 
 Web analyses execute serially because the upstream data-vendor configuration is
 process-global; the bounded queue accepts four active/queued runs by default.
