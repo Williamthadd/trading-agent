@@ -48,9 +48,33 @@ def _public_backend_url(value: Any) -> str | None:
     return candidate
 
 
-WEB_LLM_PROVIDER = "google"
+WEB_DEFAULT_LLM_PROVIDER = "google"
+WEB_LOCAL_LLM_PROVIDER = "ollama"
+WEB_LOCAL_LLM_MODEL = "tradingagents-qwen3:4b-instruct-16k"
+WEB_LLM_PROVIDERS = frozenset({WEB_DEFAULT_LLM_PROVIDER, WEB_LOCAL_LLM_PROVIDER})
+
+# The browser dashboard intentionally exposes one known-good local model. The
+# wider CLI/model catalog still supports arbitrary Ollama models, but keeping
+# the web choice explicit guarantees that selecting the local provider launches
+# the Qwen model documented and sized for this application's target laptop.
+WEB_MODEL_OPTIONS = {
+    WEB_DEFAULT_LLM_PROVIDER: MODEL_OPTIONS[WEB_DEFAULT_LLM_PROVIDER],
+    WEB_LOCAL_LLM_PROVIDER: {
+        "quick": [
+            ("Qwen3 4B Instruct 16K - Local via Ollama", WEB_LOCAL_LLM_MODEL),
+        ],
+        "deep": [
+            ("Qwen3 4B Instruct 16K - Local via Ollama", WEB_LOCAL_LLM_MODEL),
+        ],
+    },
+}
+
 PROVIDERS: tuple[dict[str, Any], ...] = (
-    {"id": WEB_LLM_PROVIDER, "label": "Google Gemini", "backend_url": None},
+    {"id": WEB_DEFAULT_LLM_PROVIDER, "label": "Google Gemini"},
+    {
+        "id": WEB_LOCAL_LLM_PROVIDER,
+        "label": "Qwen3 4B Instruct (Local / Ollama)",
+    },
 )
 
 ANALYST_LABELS = {
@@ -78,7 +102,7 @@ CUSTOM_MODELS = [{"id": "custom", "label": "Custom model ID", "custom": True}]
 
 
 def _model_options(provider: str, mode: str) -> list[dict[str, Any]]:
-    options = MODEL_OPTIONS.get(provider, {}).get(mode)
+    options = WEB_MODEL_OPTIONS.get(provider, {}).get(mode)
     if not options:
         return copy_options(CUSTOM_MODELS)
     return [
@@ -127,14 +151,14 @@ def _defaults() -> dict[str, Any]:
     depth = DEFAULT_CONFIG.get("max_debate_rounds", 1)
     if depth not in RESEARCH_DEPTHS:
         depth = 1
-    google_models = MODEL_OPTIONS[WEB_LLM_PROVIDER]
+    google_models = WEB_MODEL_OPTIONS[WEB_DEFAULT_LLM_PROVIDER]
     defaults = {
         "ticker": "SPY",
         "analysis_date": date_type.today().isoformat(),
         "output_language": DEFAULT_CONFIG.get("output_language", "English"),
         "analysts": list(ANALYSTS),
         "research_depth": depth,
-        "llm_provider": WEB_LLM_PROVIDER,
+        "llm_provider": WEB_DEFAULT_LLM_PROVIDER,
         "quick_model": google_models["quick"][0][1],
         "deep_model": google_models["deep"][0][1],
         # A server-side provider override must not be disclosed to the browser.
@@ -240,10 +264,23 @@ def create_app(
         request: RunRequest,
         _user: Annotated[dict[str, Any], Depends(require_user)],
     ) -> dict[str, Any]:
-        if request.llm_provider != WEB_LLM_PROVIDER:
+        if request.llm_provider not in WEB_LLM_PROVIDERS:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="The web dashboard supports only the Google Gemini provider.",
+                detail=(
+                    "The web dashboard supports only Google Gemini and "
+                    "Qwen3 4B Instruct through the local Ollama server."
+                ),
+            )
+        if request.llm_provider == WEB_LOCAL_LLM_PROVIDER and (
+            request.quick_model != WEB_LOCAL_LLM_MODEL or request.deep_model != WEB_LOCAL_LLM_MODEL
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "The local dashboard provider requires the TradingAgents Qwen3 4B "
+                    "16K model for both the quick and deep model."
+                ),
             )
         try:
             return manager.start_run(request)

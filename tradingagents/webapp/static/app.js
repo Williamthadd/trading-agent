@@ -1,4 +1,5 @@
 import { getAuthToken, initializeAuthentication, invalidateAuthentication } from "./auth.js";
+import { renderReportMarkdown } from "./report-markdown.js";
 
 (function () {
   "use strict";
@@ -28,6 +29,7 @@ import { getAuthToken, initializeAuthentication, invalidateAuthentication } from
     activeTab: "live",
     decisionText: "",
     reportsText: "",
+    reportsSignature: "",
     workspaceInitialized: false,
   };
 
@@ -904,13 +906,18 @@ import { getAuthToken, initializeAuthentication, invalidateAuthentication } from
 
   function renderReports(run) {
     const reports = collectReports(run);
-    dom.reportList.replaceChildren();
-    dom.reportCount.textContent = String(reports.length);
-    dom.reportsTitle.textContent = reports.length ? "Generated Reports // " + reports.length : "Generated Reports";
-    state.reportsText = reports.map(function (report) {
+    const nextReportsText = reports.map(function (report) {
       return report.label.toUpperCase() + "\n" + report.content;
     }).join("\n\n" + "-".repeat(60) + "\n\n");
+    const nextSignature = stringValue(run && (run.id || run.run_id)) + "\u0000" + nextReportsText;
+    dom.reportCount.textContent = String(reports.length);
+    dom.reportsTitle.textContent = reports.length ? "Generated Reports // " + reports.length : "Generated Reports";
+    state.reportsText = nextReportsText;
     dom.copyReports.disabled = !reports.length;
+
+    if (state.reportsSignature === nextSignature && dom.reportList.childElementCount) return;
+    state.reportsSignature = nextSignature;
+    dom.reportList.replaceChildren();
 
     if (!reports.length) {
       const empty = createElement("div", "content-empty");
@@ -929,7 +936,8 @@ import { getAuthToken, initializeAuthentication, invalidateAuthentication } from
       const summary = document.createElement("summary");
       const title = createElement("span", "", report.label);
       const meta = createElement("small", "", countWords(report.content) + " WORDS");
-      const body = createElement("pre", "report-body", report.content);
+      const body = createElement("div", "report-body report-markdown");
+      body.append(renderReportMarkdown(report.content));
       summary.append(title, meta);
       card.append(summary, body);
       fragment.append(card);
@@ -1256,6 +1264,7 @@ import { getAuthToken, initializeAuthentication, invalidateAuthentication } from
     dom.reportList.replaceChildren(createElement("div", "content-empty", "Loading stored reports..."));
     dom.decisionContent.replaceChildren(createElement("div", "content-empty", "Loading stored decision..."));
     state.reportsText = "";
+    state.reportsSignature = "";
     state.decisionText = "";
     dom.copyReports.disabled = true;
     dom.copyDecision.disabled = true;

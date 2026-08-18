@@ -357,7 +357,7 @@ def test_openai_compatible_uses_hidden_server_url_without_browser_leak(monkeypat
     from tradingagents.webapp.main import _provider_options
 
     providers = _provider_options()
-    assert [provider["id"] for provider in providers] == ["google"]
+    assert [provider["id"] for provider in providers] == ["google", "ollama"]
     assert "secret" not in repr(providers)
 
 
@@ -473,9 +473,22 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     options = client.get("/api/options")
     assert options.status_code == 200
     providers = {provider["id"]: provider for provider in options.json()["providers"]}
-    assert list(providers) == ["google"]
+    assert list(providers) == ["google", "ollama"]
     assert providers["google"]["label"] == "Google Gemini"
     assert providers["google"]["supports_backend_url"] is False
+    assert providers["ollama"]["label"] == "Qwen3 4B Instruct (Local / Ollama)"
+    assert providers["ollama"]["supports_backend_url"] is False
+    assert providers["ollama"]["requires_backend_url"] is False
+    assert providers["ollama"]["quick_models"] == [
+        {
+            "id": "tradingagents-qwen3:4b-instruct-16k",
+            "label": "Qwen3 4B Instruct 16K - Local via Ollama",
+            "custom": False,
+        }
+    ]
+    assert providers["ollama"]["deep_models"] == providers["ollama"]["quick_models"]
+    assert "thinking_control" not in providers["ollama"]
+    assert "backend_url" not in providers["ollama"]
     assert options.json()["defaults"]["llm_provider"] == "google"
     assert options.json()["defaults"]["quick_model"].startswith("gemini-")
     assert options.json()["defaults"]["deep_model"].startswith("gemini-")
@@ -535,8 +548,53 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     assert logo.headers["content-type"] == "image/png"
     assert logo.content.startswith(b"\x89PNG\r\n\x1a\n")
 
+    markdown_renderer = client.get("/report-markdown.js")
+    assert markdown_renderer.status_code == 200
+    assert "javascript" in markdown_renderer.headers["content-type"]
+    assert "renderReportMarkdown" in markdown_renderer.text
+    assert "innerHTML" not in markdown_renderer.text
+    assert 'parsed.protocol === "http:" || parsed.protocol === "https:"' in markdown_renderer.text
 
-def test_web_api_rejects_non_google_provider(monkeypatch, tmp_path):
+
+def test_web_api_accepts_local_qwen_without_google_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setattr(RunManager, "_execute_graph", _fake_execute_graph)
+
+    from tradingagents.webapp.main import create_app
+
+    store = LocalJsonRunStore(tmp_path)
+    client = TestClient(create_app(store, auth_required=False))
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "ticker": "AAPL",
+            "analysis_date": "2025-08-15",
+            "analysts": ["market"],
+            "research_depth": 1,
+            "llm_provider": "ollama",
+            "quick_model": "tradingagents-qwen3:4b-instruct-16k",
+            "deep_model": "tradingagents-qwen3:4b-instruct-16k",
+        },
+    )
+
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+    for _ in range(50):
+        detail = client.get(f"/api/runs/{run_id}").json()
+        if detail["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.01)
+
+    assert detail["status"] == "completed"
+    assert detail["llm_provider"] == "ollama"
+    assert detail["quick_model"] == "tradingagents-qwen3:4b-instruct-16k"
+    assert detail["deep_model"] == "tradingagents-qwen3:4b-instruct-16k"
+    assert detail["thinking_level"] is None
+
+
+def test_web_api_rejects_another_model_for_local_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 
     from tradingagents.webapp.main import create_app
@@ -552,14 +610,63 @@ def test_web_api_rejects_non_google_provider(monkeypatch, tmp_path):
             "analysts": ["market"],
             "research_depth": 1,
             "llm_provider": "ollama",
-            "quick_model": "test-fast",
-            "deep_model": "test-deep",
-            "backend_url": "http://localhost:11434/v1",
+            "quick_model": "qwen3:8b",
+            "deep_model": "qwen3:8b",
         },
     )
 
     assert response.status_code == 422
     assert response.json()["detail"] == (
-        "The web dashboard supports only the Google Gemini provider."
+        "The local dashboard provider requires the TradingAgents Qwen3 4B "
+        "16K model for both the quick and deep model."
     )
     assert store.list_runs() == []
+
+
+def test_web_api_rejects_a_third_provider_before_runtime_validation(tmp_path):
+    from tradingagents.webapp.main import create_app
+
+    store = LocalJsonRunStore(tmp_path)
+    client = TestClient(create_app(store, auth_required=False))
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "ticker": "AAPL",
+            "analysis_date": "2025-08-15",
+            "analysts": ["market"],
+            "research_depth": 1,
+            "llm_provider": "openai",
+            "quick_model": "gpt-5.4-mini",
+            "deep_model": "gpt-5.5",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "The web dashboard supports only Google Gemini and "
+        "Qwen3 4B Instruct through the local Ollama server."
+    )
+    assert store.list_runs() == []
+
+
+def test_local_qwen_graph_config_uses_server_side_ollama_endpoint(monkeypatch):
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+    request = RunRequest.model_validate(
+        {
+            "ticker": "AAPL",
+            "analysis_date": "2025-08-15",
+            "analysts": ["market"],
+            "research_depth": 1,
+            "llm_provider": "ollama",
+            "quick_model": "tradingagents-qwen3:4b-instruct-16k",
+            "deep_model": "tradingagents-qwen3:4b-instruct-16k",
+        }
+    )
+
+    config = build_graph_config(request)
+
+    assert config["llm_provider"] == "ollama"
+    assert config["quick_think_llm"] == "tradingagents-qwen3:4b-instruct-16k"
+    assert config["deep_think_llm"] == "tradingagents-qwen3:4b-instruct-16k"
+    assert config["backend_url"] == "http://127.0.0.1:11434/v1"
