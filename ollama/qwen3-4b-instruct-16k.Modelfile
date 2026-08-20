@@ -1,6 +1,0 @@
-FROM qwen3:4b-instruct
-
-# Ollama's OpenAI-compatible API cannot set num_ctx per request. Embedding the
-# value in a derived model prevents TradingAgents' agent/tool prompts from
-# silently falling back to Ollama's 4096-token default.
-PARAMETER num_ctx 16384

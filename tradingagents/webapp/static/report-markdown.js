@@ -254,7 +254,7 @@ function appendTable(parent, lines, startIndex, documentRef, budget) {
   const wrapper = documentRef.createElement("div");
   wrapper.className = "md-table-scroll";
   wrapper.tabIndex = 0;
-  wrapper.setAttribute("aria-label", "Scrollable research report table");
+  wrapper.setAttribute("aria-label", "Scrollable analysis table");
 
   let endIndex = startIndex + 2;
   while (endIndex < lines.length && isTableBodyLine(lines[endIndex])) endIndex += 1;

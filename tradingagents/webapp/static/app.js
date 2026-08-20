@@ -28,6 +28,7 @@ import { renderReportMarkdown } from "./report-markdown.js";
     historyDate: "",
     activeTab: "live",
     decisionText: "",
+    decisionSignature: "",
     reportsText: "",
     reportsSignature: "",
     workspaceInitialized: false,
@@ -1019,10 +1020,15 @@ import { renderReportMarkdown } from "./report-markdown.js";
 
   function renderDecision(run) {
     const decision = extractDecision(run);
-    dom.decisionContent.replaceChildren();
-    state.decisionText = decision === null || decision === undefined ? "" : valueToText(decision);
+    const nextDecisionText = decision === null || decision === undefined ? "" : valueToText(decision);
+    const nextSignature = stringValue(run && (run.id || run.run_id)) + "\u0000" + nextDecisionText;
+    state.decisionText = nextDecisionText;
     dom.copyDecision.disabled = !state.decisionText;
     dom.decisionCount.textContent = state.decisionText ? "1" : "—";
+
+    if (state.decisionSignature === nextSignature && dom.decisionContent.childElementCount) return;
+    state.decisionSignature = nextSignature;
+    dom.decisionContent.replaceChildren();
 
     if (!state.decisionText) {
       const empty = createElement("div", "content-empty decision-empty");
@@ -1060,9 +1066,11 @@ import { renderReportMarkdown } from "./report-markdown.js";
     }
 
     const headlineNode = createElement("strong", "", headline);
+    const decisionSignal = normalizeStatus(headline);
+    headlineNode.dataset.signal = decisionSignal;
     heroCopy.append(headlineNode);
     const badge = createElement("span", "decision-badge", "FINAL");
-    badge.dataset.signal = normalizeStatus(headline);
+    badge.dataset.signal = decisionSignal;
     hero.append(heroCopy, badge);
     card.append(hero);
 
@@ -1076,7 +1084,9 @@ import { renderReportMarkdown } from "./report-markdown.js";
       card.append(list);
     }
 
-    card.append(createElement("pre", "decision-narrative", narrative));
+    const narrativeBody = createElement("div", "decision-narrative report-body report-markdown");
+    narrativeBody.append(renderReportMarkdown(narrative));
+    card.append(narrativeBody);
     dom.decisionContent.append(card);
   }
 
@@ -1266,6 +1276,7 @@ import { renderReportMarkdown } from "./report-markdown.js";
     state.reportsText = "";
     state.reportsSignature = "";
     state.decisionText = "";
+    state.decisionSignature = "";
     dom.copyReports.disabled = true;
     dom.copyDecision.disabled = true;
     activateTab("live", false);

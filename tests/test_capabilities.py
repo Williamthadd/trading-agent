@@ -11,6 +11,11 @@ from tradingagents.llm_clients.capabilities import (
 
 @pytest.mark.unit
 class TestExactIdMatches:
+    def test_local_llama_prefers_json_schema(self):
+        caps = get_capabilities("tradingagents-llama3.2:16k")
+        assert caps.supports_json_schema is True
+        assert caps.preferred_structured_method == "json_schema"
+
     def test_deepseek_chat_supports_tool_choice(self):
         caps = get_capabilities("deepseek-chat")
         assert caps.supports_tool_choice is True

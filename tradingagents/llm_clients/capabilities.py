@@ -20,9 +20,9 @@ from typing import Literal
 
 StructuredMethod = Literal[
     "function_calling",  # uses tools; respects supports_tool_choice
-    "json_mode",         # uses response_format={"type":"json_object"}
-    "json_schema",       # uses response_format={"type":"json_schema",...}
-    "none",              # no structured output available; caller falls back to free-text
+    "json_mode",  # uses response_format={"type":"json_object"}
+    "json_schema",  # uses response_format={"type":"json_schema",...}
+    "none",  # no structured output available; caller falls back to free-text
 ]
 
 
@@ -89,9 +89,22 @@ _DEFAULT = ModelCapabilities(
     preferred_structured_method="function_calling",
 )
 
+# The dashboard's pinned Ollama alias runs Llama 3.2 through Ollama's
+# OpenAI-compatible endpoint. Empirical validation on the target machine shows
+# that json_schema is both valid and more reliable than asking this 3B model to
+# emit a schema as a forced function call. Analyst tools still use bind_tools;
+# this capability only affects the manager/trader structured-output wrappers.
+_OLLAMA_LLAMA_32 = ModelCapabilities(
+    supports_tool_choice=True,
+    supports_json_mode=True,
+    supports_json_schema=True,
+    preferred_structured_method="json_schema",
+)
+
 
 # Exact-ID matches take precedence over pattern matches.
 _BY_ID: dict[str, ModelCapabilities] = {
+    "tradingagents-llama3.2:16k": _OLLAMA_LLAMA_32,
     "deepseek-chat": _DEEPSEEK_CHAT,
     "deepseek-reasoner": _DEEPSEEK_THINKING,
     "deepseek-v4-flash": _DEEPSEEK_THINKING,

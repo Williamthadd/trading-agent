@@ -50,21 +50,21 @@ def _public_backend_url(value: Any) -> str | None:
 
 WEB_DEFAULT_LLM_PROVIDER = "google"
 WEB_LOCAL_LLM_PROVIDER = "ollama"
-WEB_LOCAL_LLM_MODEL = "tradingagents-qwen3:4b-instruct-16k"
+WEB_LOCAL_LLM_MODEL = "tradingagents-llama3.2:16k"
 WEB_LLM_PROVIDERS = frozenset({WEB_DEFAULT_LLM_PROVIDER, WEB_LOCAL_LLM_PROVIDER})
 
 # The browser dashboard intentionally exposes one known-good local model. The
 # wider CLI/model catalog still supports arbitrary Ollama models, but keeping
 # the web choice explicit guarantees that selecting the local provider launches
-# the Qwen model documented and sized for this application's target laptop.
+# the Llama model documented and sized for this application's target laptop.
 WEB_MODEL_OPTIONS = {
     WEB_DEFAULT_LLM_PROVIDER: MODEL_OPTIONS[WEB_DEFAULT_LLM_PROVIDER],
     WEB_LOCAL_LLM_PROVIDER: {
         "quick": [
-            ("Qwen3 4B Instruct 16K - Local via Ollama", WEB_LOCAL_LLM_MODEL),
+            ("Llama 3.2 3B 16K - Local via Ollama", WEB_LOCAL_LLM_MODEL),
         ],
         "deep": [
-            ("Qwen3 4B Instruct 16K - Local via Ollama", WEB_LOCAL_LLM_MODEL),
+            ("Llama 3.2 3B 16K - Local via Ollama", WEB_LOCAL_LLM_MODEL),
         ],
     },
 }
@@ -73,7 +73,7 @@ PROVIDERS: tuple[dict[str, Any], ...] = (
     {"id": WEB_DEFAULT_LLM_PROVIDER, "label": "Google Gemini"},
     {
         "id": WEB_LOCAL_LLM_PROVIDER,
-        "label": "Qwen3 4B Instruct (Local / Ollama)",
+        "label": "Llama 3.2 3B (Local / Ollama)",
     },
 )
 
@@ -269,7 +269,7 @@ def create_app(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     "The web dashboard supports only Google Gemini and "
-                    "Qwen3 4B Instruct through the local Ollama server."
+                    "Llama 3.2 3B through the local Ollama server."
                 ),
             )
         if request.llm_provider == WEB_LOCAL_LLM_PROVIDER and (
@@ -278,7 +278,7 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
-                    "The local dashboard provider requires the TradingAgents Qwen3 4B "
+                    "The local dashboard provider requires the TradingAgents Llama 3.2 "
                     "16K model for both the quick and deep model."
                 ),
             )

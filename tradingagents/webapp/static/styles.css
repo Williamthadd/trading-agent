@@ -2064,6 +2064,36 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-weight: 800;
 }
 
+.decision-hero strong:is([data-signal="buy"], [data-signal="strong_buy"], [data-signal="overweight"]),
+.decision-badge:is([data-signal="buy"], [data-signal="strong_buy"], [data-signal="overweight"]) {
+  color: var(--green);
+}
+
+.decision-badge:is([data-signal="buy"], [data-signal="strong_buy"], [data-signal="overweight"]) {
+  background: rgb(82 222 134 / 9%);
+  border-color: rgb(82 222 134 / 55%);
+}
+
+.decision-hero strong:is([data-signal="sell"], [data-signal="strong_sell"], [data-signal="underweight"]),
+.decision-badge:is([data-signal="sell"], [data-signal="strong_sell"], [data-signal="underweight"]) {
+  color: var(--red);
+}
+
+.decision-badge:is([data-signal="sell"], [data-signal="strong_sell"], [data-signal="underweight"]) {
+  background: rgb(255 93 100 / 9%);
+  border-color: rgb(255 93 100 / 55%);
+}
+
+.decision-hero strong:is([data-signal="hold"], [data-signal="neutral"]),
+.decision-badge:is([data-signal="hold"], [data-signal="neutral"]) {
+  color: var(--yellow);
+}
+
+.decision-badge:is([data-signal="hold"], [data-signal="neutral"]) {
+  background: rgb(241 212 76 / 8%);
+  border-color: rgb(241 212 76 / 55%);
+}
+
 .decision-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -2097,14 +2127,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .decision-narrative {
-  margin: 0;
-  padding: 14px;
-  color: #c8cdcf;
-  font-family: var(--mono);
-  font-size: calc(10px * var(--text-scale));
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  background:
+    linear-gradient(180deg, rgb(44 217 232 / 3%), transparent 110px),
+    #0c0f11;
 }
 
 .history-panel {

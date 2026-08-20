@@ -1,18 +1,18 @@
-# Local Qwen3 4B Instruct setup
+# Local Llama 3.2 3B setup
 
 The web dashboard can run either Google Gemini through its external API or a
-TradingAgents-specific variant of `qwen3:4b-instruct` locally through Ollama.
-The variant keeps the same Qwen weights but embeds a 16K context window so the
-analyst prompt and subsequent tool responses do not hit Ollama's 4096-token
-default. The local provider sends prompts to the server-controlled endpoint at
-`http://localhost:11434/v1`; API keys and prompts are not sent to Gemini for a
-local run.
+TradingAgents-specific variant of `llama3.2:latest` locally through Ollama. The
+variant uses the same Llama 3.2 3B weights but embeds a 16K context window so
+analyst prompts and subsequent tool responses do not fall back to Ollama's
+4096-token runtime default. The local provider sends prompts only to the
+server-controlled endpoint at `http://localhost:11434/v1`; it does not send
+those prompts to Gemini.
 
 ## 1. Install and verify Ollama
 
 Install the current Ollama for Windows from <https://ollama.com/download/windows>.
-Ollama should remain running in the Windows system tray while TradingAgents is
-using the local provider.
+Ollama must remain running in the Windows system tray while TradingAgents uses
+the local provider.
 
 Verify the service:
 
@@ -21,23 +21,31 @@ ollama --version
 ollama list
 ```
 
-Download the exact dashboard model if it is not already listed:
+Download the base model and create the exact 16K dashboard alias:
 
 ```powershell
-ollama pull qwen3:4b-instruct
-ollama create tradingagents-qwen3:4b-instruct-16k -f .\ollama\qwen3-4b-instruct-16k.Modelfile
+ollama pull llama3.2:latest
+ollama create tradingagents-llama3.2:16k -f .\ollama\llama3.2-16k.Modelfile
 ```
 
-Run the `ollama create` command from the TradingAgents repository root. It
-creates a small local manifest that reuses the downloaded Qwen weights; it does
-not download a second 2.5 GB copy. The dashboard deliberately uses
-`tradingagents-qwen3:4b-instruct-16k` for both quick and deep agents so only one
-model occupies memory.
+Run `ollama create` from the TradingAgents repository root. The alias reuses
+the downloaded model layers; it does not download another full copy. Confirm
+that the context parameter is present:
+
+```powershell
+ollama show tradingagents-llama3.2:16k
+```
+
+The output should list `num_ctx 16384`. The dashboard deliberately uses this
+alias for both quick and deep agents so only one model occupies memory. Do not
+replace it with plain `llama3.2:latest` in a dashboard request: on this 4 GB GPU
+that can revert to a 4096-token allocation and reject normal TradingAgents
+prompts.
 
 ## 2. Apply conservative 4 GB VRAM settings
 
-For an NVIDIA RTX 3050 Laptop GPU with 4 GB VRAM, keep one request/model at a
-time and reduce the KV-cache footprint:
+For an NVIDIA RTX 3050 Laptop GPU with 4 GB VRAM, keep one request and one
+loaded model at a time, and reduce the KV-cache footprint:
 
 ```powershell
 setx OLLAMA_FLASH_ATTENTION 1
@@ -47,11 +55,12 @@ setx OLLAMA_MAX_LOADED_MODELS 1
 ```
 
 Exit Ollama completely from the system tray and launch it again after running
-`setx`; those values apply only to newly started processes. The model-specific
-Modelfile controls the 16K context, while these server settings enable the more
-compact q8 KV cache. Some layers will remain in system RAM because 4 GB VRAM is
-not enough for the model plus a 16K cache; GPU acceleration remains active, but
-generation will be slower than with a 4K context.
+`setx`; those settings apply only to newly started processes. The Modelfile
+controls the 16K context, while these server settings enable a smaller q8 KV
+cache and prevent concurrent models from competing for the same GPU. A mixed
+CPU/GPU split is expected with a 16K context on 4 GB VRAM and is slower than a
+4K allocation, but it is large enough for the agent/tool prompts that the 4K
+configuration rejected.
 
 ## 3. Configure TradingAgents
 
@@ -63,7 +72,7 @@ WEB_RUN_QUEUE_LIMIT=1
 ```
 
 `WEB_RUN_QUEUE_LIMIT=1` prevents multiple analyses from competing for the same
-4 GB GPU. Keep `GOOGLE_API_KEY` configured only if Google Gemini should remain
+GPU. Keep `GOOGLE_API_KEY` configured only if Google Gemini should remain
 available as the other dashboard choice.
 
 Install and start the dashboard from the project directory:
@@ -77,9 +86,13 @@ tradingagents-web
 Open <http://127.0.0.1:8000>, log in, and select one of:
 
 - **Google Gemini** for the external Gemini API.
-- **Qwen3 4B Instruct (Local GPU)** for Ollama on this laptop.
+- **Llama 3.2 3B (Local / Ollama)** for the local 16K model.
 
-## 4. Verify GPU execution
+Start with Shallow research and one analyst. Increase the analyst count or
+research depth only after that run completes successfully; each additional
+debate round adds prior reports to later prompts and increases execution time.
+
+## 4. Verify context and GPU execution
 
 While a local analysis is producing output, run:
 
@@ -88,30 +101,46 @@ ollama ps
 nvidia-smi
 ```
 
-The `PROCESSOR` column in `ollama ps` should show `100% GPU` or a GPU-heavy
-CPU/GPU split, and `nvidia-smi` should show Ollama using VRAM. A mixed split is
-valid but slower. If Ollama falls back to CPU, update the NVIDIA driver, restart
-Ollama, close other GPU-heavy applications, and retry with the 8K context.
+For the dashboard model, `ollama ps` should show `CONTEXT 16384` and a GPU or
+mixed CPU/GPU value under `PROCESSOR`. A mixed split still means GPU
+acceleration is active. If it shows context 4096, recreate the alias and
+restart the TradingAgents run.
+
+You can also verify that an input larger than 4K is accepted:
+
+```powershell
+$text = ("Market data context for AAPL. " * 1200)
+$body = @{
+  model = "tradingagents-llama3.2:16k"
+  stream = $false
+  messages = @(@{ role = "user"; content = $text + " Summarize in one sentence." })
+} | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri http://localhost:11434/api/chat `
+  -ContentType "application/json" -Body $body
+```
 
 ## Troubleshooting
 
 - **Connection refused / Ollama unavailable**: launch the Ollama Windows app and
   confirm `Invoke-RestMethod http://localhost:11434/api/tags` succeeds.
-- **Model not found**: run `ollama pull qwen3:4b-instruct`, then recreate the
-  dashboard alias with `ollama create tradingagents-qwen3:4b-instruct-16k -f
-  .\ollama\qwen3-4b-instruct-16k.Modelfile`.
+- **Model not found**: run `ollama pull llama3.2:latest`, then recreate the alias
+  with `ollama create tradingagents-llama3.2:16k -f
+  .\ollama\llama3.2-16k.Modelfile`.
 - **Request exceeds context size 4096**: the base model was selected or the
   alias has not been created. Confirm the dashboard uses
-  `tradingagents-qwen3:4b-instruct-16k` and recreate it using the command above.
-- **Out of memory or very slow output**: close games/creative applications and
-  keep `OLLAMA_NUM_PARALLEL=1`. The 16K model will use both GPU and system RAM
-  on a 4 GB RTX 3050.
-- **Gemini reports a missing key**: add `GOOGLE_API_KEY` to `.env`; this is not
-  required for Qwen/Ollama runs.
-- **Local Qwen quality differs from Gemini**: a 4B local model is materially
-  smaller than hosted Gemini. Use shallow research and one or two analysts for
-  the first test, then increase depth after confirming stability.
+  `tradingagents-llama3.2:16k`, recreate it, and restart the web server.
+- **Request exceeds context size 16384**: use Shallow research, select fewer
+  analysts, and start a new run. Raising context beyond 16K on a 4 GB GPU can
+  push more layers into system RAM and make generation substantially slower.
+- **Out of memory or very slow output**: close games and creative applications,
+  stop other models with `ollama stop <model>`, and keep
+  `OLLAMA_NUM_PARALLEL=1`.
+- **Gemini reports a missing key**: add `GOOGLE_API_KEY` to `.env`; it is not
+  required for Llama/Ollama runs.
+- **Local Llama quality differs from Gemini**: a 3B local model is materially
+  smaller than hosted Gemini. Prefer English output, Shallow depth, and one or
+  two analysts when reliability matters.
 
-Firebase authentication, Firestore history, Yahoo market data, and optional
-news/data sources still use the internet. Selecting Qwen makes the LLM local;
+Firebase Authentication, Firestore history, Yahoo market data, and optional
+news/data sources still use the internet. Selecting Llama makes the LLM local;
 it does not make the entire TradingAgents application offline.

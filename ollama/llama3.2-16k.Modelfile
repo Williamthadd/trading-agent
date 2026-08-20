@@ -1,0 +1,6 @@
+FROM llama3.2:latest
+
+# Ollama's OpenAI-compatible API cannot reliably set num_ctx per request.
+# Embedding it in a derived model keeps TradingAgents' agent prompts and tool
+# responses from silently falling back to Ollama's 4096-token runtime default.
+PARAMETER num_ctx 16384

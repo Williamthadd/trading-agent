@@ -180,7 +180,7 @@ tradingagents-web
 ```
 
 Then open `http://127.0.0.1:8000`. The dashboard offers Google Gemini through
-its external API and **Qwen3 4B Instruct** locally through Ollama. Selecting the
+its external API and **Llama 3.2 3B** locally through Ollama. Selecting the
 provider determines which runtime handles both the quick- and deep-thinking
 agents; the local choice never needs a Gemini API key. See
 [`docs/LOCAL_OLLAMA_SETUP.md`](docs/LOCAL_OLLAMA_SETUP.md) for the recommended

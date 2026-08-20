@@ -2,6 +2,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -476,13 +477,13 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     assert list(providers) == ["google", "ollama"]
     assert providers["google"]["label"] == "Google Gemini"
     assert providers["google"]["supports_backend_url"] is False
-    assert providers["ollama"]["label"] == "Qwen3 4B Instruct (Local / Ollama)"
+    assert providers["ollama"]["label"] == "Llama 3.2 3B (Local / Ollama)"
     assert providers["ollama"]["supports_backend_url"] is False
     assert providers["ollama"]["requires_backend_url"] is False
     assert providers["ollama"]["quick_models"] == [
         {
-            "id": "tradingagents-qwen3:4b-instruct-16k",
-            "label": "Qwen3 4B Instruct 16K - Local via Ollama",
+            "id": "tradingagents-llama3.2:16k",
+            "label": "Llama 3.2 3B 16K - Local via Ollama",
             "custom": False,
         }
     ]
@@ -555,8 +556,14 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     assert "innerHTML" not in markdown_renderer.text
     assert 'parsed.protocol === "http:" || parsed.protocol === "https:"' in markdown_renderer.text
 
+    app_script = client.get("/app.js")
+    assert app_script.status_code == 200
+    assert app_script.text.count("renderReportMarkdown(") == 2
+    assert "narrativeBody.append(renderReportMarkdown(narrative))" in app_script.text
+    assert 'createElement("pre", "decision-narrative"' not in app_script.text
 
-def test_web_api_accepts_local_qwen_without_google_key(monkeypatch, tmp_path):
+
+def test_web_api_accepts_local_llama_without_google_key(monkeypatch, tmp_path):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setattr(RunManager, "_execute_graph", _fake_execute_graph)
@@ -574,8 +581,8 @@ def test_web_api_accepts_local_qwen_without_google_key(monkeypatch, tmp_path):
             "analysts": ["market"],
             "research_depth": 1,
             "llm_provider": "ollama",
-            "quick_model": "tradingagents-qwen3:4b-instruct-16k",
-            "deep_model": "tradingagents-qwen3:4b-instruct-16k",
+            "quick_model": "tradingagents-llama3.2:16k",
+            "deep_model": "tradingagents-llama3.2:16k",
         },
     )
 
@@ -589,8 +596,8 @@ def test_web_api_accepts_local_qwen_without_google_key(monkeypatch, tmp_path):
 
     assert detail["status"] == "completed"
     assert detail["llm_provider"] == "ollama"
-    assert detail["quick_model"] == "tradingagents-qwen3:4b-instruct-16k"
-    assert detail["deep_model"] == "tradingagents-qwen3:4b-instruct-16k"
+    assert detail["quick_model"] == "tradingagents-llama3.2:16k"
+    assert detail["deep_model"] == "tradingagents-llama3.2:16k"
     assert detail["thinking_level"] is None
 
 
@@ -610,17 +617,25 @@ def test_web_api_rejects_another_model_for_local_provider(monkeypatch, tmp_path)
             "analysts": ["market"],
             "research_depth": 1,
             "llm_provider": "ollama",
-            "quick_model": "qwen3:8b",
-            "deep_model": "qwen3:8b",
+            "quick_model": "llama3.2:latest",
+            "deep_model": "llama3.2:latest",
         },
     )
 
     assert response.status_code == 422
     assert response.json()["detail"] == (
-        "The local dashboard provider requires the TradingAgents Qwen3 4B "
+        "The local dashboard provider requires the TradingAgents Llama 3.2 "
         "16K model for both the quick and deep model."
     )
     assert store.list_runs() == []
+
+
+def test_local_llama_modelfile_pins_a_16k_context():
+    model_file = Path(__file__).parents[1] / "ollama" / "llama3.2-16k.Modelfile"
+    content = model_file.read_text(encoding="utf-8")
+
+    assert "FROM llama3.2:latest" in content
+    assert "PARAMETER num_ctx 16384" in content
 
 
 def test_web_api_rejects_a_third_provider_before_runtime_validation(tmp_path):
@@ -645,12 +660,12 @@ def test_web_api_rejects_a_third_provider_before_runtime_validation(tmp_path):
     assert response.status_code == 422
     assert response.json()["detail"] == (
         "The web dashboard supports only Google Gemini and "
-        "Qwen3 4B Instruct through the local Ollama server."
+        "Llama 3.2 3B through the local Ollama server."
     )
     assert store.list_runs() == []
 
 
-def test_local_qwen_graph_config_uses_server_side_ollama_endpoint(monkeypatch):
+def test_local_llama_graph_config_uses_server_side_ollama_endpoint(monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
     request = RunRequest.model_validate(
         {
@@ -659,14 +674,14 @@ def test_local_qwen_graph_config_uses_server_side_ollama_endpoint(monkeypatch):
             "analysts": ["market"],
             "research_depth": 1,
             "llm_provider": "ollama",
-            "quick_model": "tradingagents-qwen3:4b-instruct-16k",
-            "deep_model": "tradingagents-qwen3:4b-instruct-16k",
+            "quick_model": "tradingagents-llama3.2:16k",
+            "deep_model": "tradingagents-llama3.2:16k",
         }
     )
 
     config = build_graph_config(request)
 
     assert config["llm_provider"] == "ollama"
-    assert config["quick_think_llm"] == "tradingagents-qwen3:4b-instruct-16k"
-    assert config["deep_think_llm"] == "tradingagents-qwen3:4b-instruct-16k"
+    assert config["quick_think_llm"] == "tradingagents-llama3.2:16k"
+    assert config["deep_think_llm"] == "tradingagents-llama3.2:16k"
     assert config["backend_url"] == "http://127.0.0.1:11434/v1"
