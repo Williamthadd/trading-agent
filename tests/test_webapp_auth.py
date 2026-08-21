@@ -5,6 +5,7 @@ from tradingagents.webapp.storage import LocalJsonRunStore
 
 
 def _set_client_config(monkeypatch):
+    monkeypatch.delenv("WEB_CORS_ORIGINS", raising=False)
     monkeypatch.delenv("WEB_AUTH_ALLOWED_EMAILS", raising=False)
     monkeypatch.setenv("FIREBASE_WEB_API_KEY", "public-web-api-key")
     monkeypatch.setenv("FIREBASE_AUTH_DOMAIN", "tradingagents-test.firebaseapp.com")
@@ -33,16 +34,31 @@ def test_private_api_requires_valid_firebase_bearer_token(monkeypatch, tmp_path)
         )
     )
 
-    assert client.get("/").status_code == 200
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.json()["service"] == "tradingagents-api"
     assert client.get("/api/health").status_code == 200
     config = client.get("/api/auth/config")
     assert config.status_code == 200
     assert config.json()["configured"] is True
     assert config.json()["firebase"]["apiKey"] == "public-web-api-key"
 
-    missing = client.get("/api/options")
+    openapi = client.get("/api/openapi.json").json()
+    assert openapi["components"]["securitySchemes"]["FirebaseBearer"] == {
+        "type": "http",
+        "description": "Firebase Authentication ID token issued to the standalone frontend.",
+        "scheme": "bearer",
+        "bearerFormat": "Firebase ID token",
+    }
+    assert openapi["paths"]["/api/options"]["get"]["security"] == [{"FirebaseBearer": []}]
+
+    missing = client.get(
+        "/api/options",
+        headers={"Origin": "http://localhost:5173"},
+    )
     assert missing.status_code == 401
     assert missing.headers["WWW-Authenticate"] == "Bearer"
+    assert missing.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
 
     invalid = client.get("/api/options", headers={"Authorization": "Bearer invalid"})
     assert invalid.status_code == 401

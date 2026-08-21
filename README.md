@@ -169,54 +169,60 @@ python -m cli.main     # alternative: run directly from source
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
-### Web Dashboard
+### Backend API and standalone React frontend
 
-Install the optional web dependencies and launch the Bloomberg-style dashboard:
+The Python package now serves an API only; it no longer embeds the legacy
+HTML/CSS/JavaScript dashboard. Install and start the backend in one terminal:
 
 ```powershell
 conda activate tradingagents
-pip install -e ".[web]"
-tradingagents-web
+pip install -e ".[api]"
+tradingagents-api
 ```
 
-Then open `http://127.0.0.1:8000`. The dashboard offers Google Gemini through
-its external API and **Llama 3.2 3B** locally through Ollama. Selecting the
-provider determines which runtime handles both the quick- and deep-thinking
-agents; the local choice never needs a Gemini API key. See
-[`docs/LOCAL_OLLAMA_SETUP.md`](docs/LOCAL_OLLAMA_SETUP.md) for the recommended
-Windows/NVIDIA setup. The dashboard streams each agent's progress and groups
-completed runs by the day each run was created. The CLI and Python library
-retain their broader provider integrations. The dashboard works
-immediately with local JSON persistence; to save runs in Cloud Firestore, follow
-[`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md). Keep all LLM API keys and
-Firebase service-account credentials in `.env`/`secrets` on the server only.
-Firebase Authentication is required by default: users must pass the login page
-with Google or an existing email/password account before the backend permits
-options, analysis runs, agent responses, or Firestore-backed history. Follow
-[`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md) to register the web
-app, enable both providers, create password users, and configure an email
-allowlist. There is intentionally no registration action in the dashboard.
-Use the header's **Text Size** slider to scale interface text from 85% to 160%;
-the browser remembers the selected size for the next session.
-For a no-Docker deployment on Render Free, use the included `render.yaml` and
-follow [`docs/RENDER_FREE_SETUP.md`](docs/RENDER_FREE_SETUP.md). It pins Python
-3.12, starts exactly one worker, and includes conservative settings for the
-512 MB / 0.1 CPU instance.
-The server binds to `127.0.0.1` by default. Do not expose it directly to the
-public internet without TLS and rate limiting. Firebase login protects the API,
-but authenticated users can still consume the configured market-data and LLM
-quotas.
+The API listens on `http://127.0.0.1:8000`. Its health endpoint is
+`/api/health`, interactive API documentation is available at `/api/docs`, and
+the protected application contract remains under `/api/*`. The previous
+`.[web]` extra and `tradingagents-web` command remain as compatibility aliases,
+but they launch the same API-only process.
 
-Web analyses execute serially because the upstream data-vendor configuration is
+Create the React + Vite + TypeScript application in a separate repository by
+using the complete, copy-paste implementation specification in
+[`docs/REACT_FRONTEND_PROMPT.md`](docs/REACT_FRONTEND_PROMPT.md). It captures the
+original Bloomberg-terminal layout, Firebase login, dynamic provider controls,
+polling, daily history, Markdown reports/decision formatting, text-size slider,
+responsive behavior, accessibility, and security requirements. The suggested
+local frontend URL is `http://localhost:5173`.
+
+The API permits only exact frontend origins. The two local Vite origins are
+allowed by default; override them without using a wildcard when necessary:
+
+```dotenv
+WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+Firebase Authentication is required by default. The standalone frontend obtains
+the public Web config from `/api/auth/config`, authenticates with Google or an
+existing email/password account, and sends a Firebase ID token as a Bearer token
+to protected endpoints. It never connects to Firestore directly. Follow
+[`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md) and
+[`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md); keep every LLM key and the
+Firebase service-account credential in the backend `.env`/`secrets` only.
+
+The API exposes Google Gemini and **Llama 3.2 3B** through the local Ollama
+server. See [`docs/LOCAL_OLLAMA_SETUP.md`](docs/LOCAL_OLLAMA_SETUP.md) for its
+16K-context Windows/NVIDIA setup. The CLI and Python library retain their wider
+provider integrations.
+
+Analyses execute serially because upstream data-vendor configuration is
 process-global; the bounded queue accepts four active/queued runs by default.
-The default restart reconciliation assumes one web-server instance. If multiple
-instances intentionally share one Firestore database, set
-`WEB_RECONCILE_STALE_RUNS=false` and use external job ownership/coordination.
-For the supported local deployment, run the provided `tradingagents-web`
-launcher with its single worker; do not add `uvicorn --workers 2` (or more).
-Per-request Ollama or OpenAI-compatible endpoint URLs must match the endpoint
-configured on the server unless `WEB_ALLOW_CUSTOM_BACKEND_URLS=true`; only
-enable that override for trusted users and trusted endpoints.
+Run one API worker. Restart reconciliation also assumes one API instance; if
+multiple instances intentionally share one Firestore database, set
+`WEB_RECONCILE_STALE_RUNS=false` and add external job ownership/coordination.
+Do not expose raw Uvicorn publicly without TLS, rate limiting, and an explicit
+CORS allowlist. Authentication does not prevent an allowed user from consuming
+configured LLM/data quotas, and the current shared history is not partitioned
+per Firebase user.
 
 ### Markets and tickers
 

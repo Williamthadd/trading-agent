@@ -222,7 +222,7 @@ __marimo__/
 .env.enterprise
 reports/
 
-# Web dashboard state and Firebase service-account credentials
+# Backend API state and Firebase service-account credentials
 data/webapp/
 secrets/*.json
 firebase-service-account*.json

@@ -1,13 +1,13 @@
-"""FastAPI entry point for the TradingAgents browser application."""
+"""FastAPI entry point for the TradingAgents backend API."""
 
 import os
 from datetime import date as date_type
-from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Path as ApiPath, Query, status
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, FastAPI, HTTPException, Path as ApiPath, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients.model_catalog import MODEL_OPTIONS
@@ -48,12 +48,56 @@ def _public_backend_url(value: Any) -> str | None:
     return candidate
 
 
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+
+
+def _cors_origins() -> list[str]:
+    """Return exact, credential-free frontend origins allowed by the API."""
+    raw = os.getenv("WEB_CORS_ORIGINS", "").strip()
+    candidates = raw.split(",") if raw else DEFAULT_CORS_ORIGINS
+    origins: list[str] = []
+    for raw_origin in candidates:
+        candidate = raw_origin.strip().rstrip("/")
+        parsed = urlsplit(candidate)
+        try:
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise RuntimeConfigurationError(
+                f"WEB_CORS_ORIGINS contains an invalid port: {raw_origin.strip()!r}"
+            ) from exc
+        if (
+            not candidate
+            or candidate == "*"
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeConfigurationError(
+                "WEB_CORS_ORIGINS must contain comma-separated http(s) origins only "
+                "(for example http://localhost:5173), without paths, credentials, "
+                "queries, fragments, or wildcards."
+            )
+        # Reading ``parsed.port`` above also validates the port range. Keep the
+        # user's exact hostname spelling because CORS origin matching is exact.
+        _ = parsed_port
+        if candidate not in origins:
+            origins.append(candidate)
+    return origins
+
+
 WEB_DEFAULT_LLM_PROVIDER = "google"
 WEB_LOCAL_LLM_PROVIDER = "ollama"
 WEB_LOCAL_LLM_MODEL = "tradingagents-llama3.2:16k"
 WEB_LLM_PROVIDERS = frozenset({WEB_DEFAULT_LLM_PROVIDER, WEB_LOCAL_LLM_PROVIDER})
 
-# The browser dashboard intentionally exposes one known-good local model. The
+# The frontend options API intentionally exposes one known-good local model. The
 # wider CLI/model catalog still supports arbitrary Ollama models, but keeping
 # the web choice explicit guarantees that selecting the local provider launches
 # the Llama model documented and sized for this application's target laptop.
@@ -161,7 +205,7 @@ def _defaults() -> dict[str, Any]:
         "llm_provider": WEB_DEFAULT_LLM_PROVIDER,
         "quick_model": google_models["quick"][0][1],
         "deep_model": google_models["deep"][0][1],
-        # A server-side provider override must not be disclosed to the browser.
+        # A server-side provider override must not be disclosed to API clients.
         "backend_url": None,
         "thinking_level": DEFAULT_CONFIG.get("google_thinking_level"),
     }
@@ -186,12 +230,16 @@ def create_app(
     auth_required: bool | None = None,
     token_verifier: TokenVerifier | None = None,
 ) -> FastAPI:
+    # Validate the browser boundary before constructing RunManager. Its startup
+    # reconciliation can update persisted runs, so invalid CORS configuration
+    # must fail before any storage state is touched.
+    cors_origins = _cors_origins()
     run_store = store or build_run_store()
     manager = RunManager(run_store)
     auth_manager = FirebaseAuthManager(required=auth_required, token_verifier=token_verifier)
     api = FastAPI(
-        title="TradingAgents Web Terminal",
-        description="Browser interface and polling API for the TradingAgents graph.",
+        title="TradingAgents API",
+        description="Authenticated orchestration and polling API for the TradingAgents graph.",
         version=__version__,
         docs_url="/api/docs",
         redoc_url=None,
@@ -199,8 +247,32 @@ def create_app(
     )
     api.state.run_manager = manager
     api.state.auth_manager = auth_manager
+    api.state.cors_origins = cors_origins
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=api.state.cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Accept", "Authorization", "Content-Type"],
+        expose_headers=["Retry-After", "WWW-Authenticate"],
+        max_age=600,
+    )
+    firebase_bearer = HTTPBearer(
+        auto_error=False,
+        bearerFormat="Firebase ID token",
+        scheme_name="FirebaseBearer",
+        description="Firebase Authentication ID token issued to the standalone frontend.",
+    )
 
-    def require_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def require_user(
+        credentials: Annotated[
+            HTTPAuthorizationCredentials | None,
+            Depends(firebase_bearer),
+        ],
+    ) -> dict[str, Any]:
+        authorization = (
+            f"{credentials.scheme} {credentials.credentials}" if credentials is not None else None
+        )
         try:
             return auth_manager.authenticate(authorization)
         except InvalidAuthenticationToken as exc:
@@ -217,11 +289,21 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+    @api.get("/", include_in_schema=False, tags=["system"])
+    def root() -> dict[str, Any]:
+        return {
+            "service": "tradingagents-api",
+            "status": "ok",
+            "health": "/api/health",
+            "docs": "/api/docs",
+            "message": "The frontend is a separate application; this process serves the backend API only.",
+        }
+
     @api.get("/api/health", response_model=HealthResponse, tags=["system"])
     def health() -> dict[str, Any]:
         return {
             "status": "ok",
-            "service": "tradingagents-web",
+            "service": "tradingagents-api",
             "version": __version__,
             "storage": manager.storage_info,
             "active_runs": manager.active_count,
@@ -268,7 +350,7 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
-                    "The web dashboard supports only Google Gemini and "
+                    "The TradingAgents API supports only Google Gemini and "
                     "Llama 3.2 3B through the local Ollama server."
                 ),
             )
@@ -278,7 +360,7 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
-                    "The local dashboard provider requires the TradingAgents Llama 3.2 "
+                    "The local API provider requires the TradingAgents Llama 3.2 "
                     "16K model for both the quick and deep model."
                 ),
             )
@@ -339,12 +421,6 @@ def create_app(
     ) -> dict[str, Any]:
         return get_run(_user, run_id)
 
-    static_dir = Path(__file__).resolve().parent / "static"
-    if static_dir.is_dir():
-        # Mounted last so /api/* always wins. ``html=True`` serves index.html
-        # at the root while assets stay relative to the same package directory.
-        api.mount("/", StaticFiles(directory=static_dir, html=True), name="web-terminal")
-
     return api
 
 
@@ -352,7 +428,7 @@ app = create_app()
 
 
 def cli() -> None:
-    """Launch the single-process web server used by ``tradingagents-web``."""
+    """Launch the single-process backend API server."""
     import uvicorn
 
     host = os.getenv("WEB_HOST", "127.0.0.1").strip() or "127.0.0.1"

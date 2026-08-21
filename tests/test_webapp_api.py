@@ -91,6 +91,70 @@ def test_safe_error_redacts_url_credentials_query_and_fragment():
     assert "debug" not in message
 
 
+def test_cors_origins_are_exact_and_normalized(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIREBASE_ENABLED", "false")
+    monkeypatch.setenv("WEB_LOCAL_DATA_DIR", str(tmp_path / "cors-import-store"))
+    monkeypatch.setenv("WEB_RECONCILE_STALE_RUNS", "false")
+    monkeypatch.setenv(
+        "WEB_CORS_ORIGINS",
+        "http://localhost:3000/, https://frontend.example, http://localhost:3000",
+    )
+
+    from tradingagents.webapp.main import _cors_origins
+
+    assert _cors_origins() == ["http://localhost:3000", "https://frontend.example"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "*",
+        "localhost:5173",
+        "http://user:password@localhost:5173",
+        "http://localhost:5173/path",
+        "http://localhost:5173?token=secret",
+        "http://localhost:5173#fragment",
+        "http://localhost:99999",
+    ],
+)
+def test_cors_origins_reject_unsafe_values(monkeypatch, tmp_path, value):
+    monkeypatch.setenv("FIREBASE_ENABLED", "false")
+    monkeypatch.setenv("WEB_LOCAL_DATA_DIR", str(tmp_path / "cors-import-store"))
+    monkeypatch.setenv("WEB_RECONCILE_STALE_RUNS", "false")
+    monkeypatch.setenv("WEB_CORS_ORIGINS", "http://localhost:5173")
+
+    from tradingagents.webapp.main import _cors_origins
+
+    monkeypatch.setenv("WEB_CORS_ORIGINS", value)
+
+    with pytest.raises(RuntimeConfigurationError, match="WEB_CORS_ORIGINS"):
+        _cors_origins()
+
+
+def test_create_app_validates_cors_before_constructing_run_manager(monkeypatch, tmp_path):
+    monkeypatch.setenv("FIREBASE_ENABLED", "false")
+    monkeypatch.setenv("WEB_LOCAL_DATA_DIR", str(tmp_path / "cors-import-store"))
+    monkeypatch.setenv("WEB_RECONCILE_STALE_RUNS", "false")
+    monkeypatch.setenv("WEB_CORS_ORIGINS", "http://localhost:5173")
+
+    import tradingagents.webapp.main as web_main
+
+    constructed = False
+
+    def unexpected_manager(_store):
+        nonlocal constructed
+        constructed = True
+        raise AssertionError("RunManager must not be constructed for invalid CORS")
+
+    monkeypatch.setattr(web_main, "RunManager", unexpected_manager)
+    monkeypatch.setenv("WEB_CORS_ORIGINS", "*")
+
+    with pytest.raises(RuntimeConfigurationError, match="WEB_CORS_ORIGINS"):
+        web_main.create_app(object(), auth_required=False)
+
+    assert constructed is False
+
+
 def test_run_manager_reconciles_interrupted_run(tmp_path):
     store = LocalJsonRunStore(tmp_path)
     store.create_run({"run_id": "stale-run", "status": "running", "progress": 42})
@@ -452,6 +516,7 @@ def test_thread_start_failure_marks_persisted_run_failed(monkeypatch, tmp_path):
 
 def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path):
     monkeypatch.setenv("FIREBASE_ENABLED", "false")
+    monkeypatch.delenv("WEB_CORS_ORIGINS", raising=False)
     monkeypatch.setenv("WEB_LOCAL_DATA_DIR", str(tmp_path / "implicit-store"))
     monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
     monkeypatch.setattr(RunManager, "_execute_graph", _fake_execute_graph)
@@ -469,7 +534,46 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
 
     health = client.get("/api/health")
     assert health.status_code == 200
+    assert health.json()["service"] == "tradingagents-api"
     assert health.json()["storage"]["backend"] == "local-json"
+
+    preflight = client.options(
+        "/api/options",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["Access-Control-Allow-Origin"] == "http://localhost:5173"
+    assert "Authorization" in preflight.headers["Access-Control-Allow-Headers"]
+
+    rejected_preflight = client.options(
+        "/api/options",
+        headers={
+            "Origin": "https://untrusted.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert rejected_preflight.status_code == 400
+    assert "Access-Control-Allow-Origin" not in rejected_preflight.headers
+
+    cors_health = client.get(
+        "/api/health",
+        headers={"Origin": "http://127.0.0.1:5173"},
+    )
+    assert cors_health.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5173"
+    assert "Origin" in cors_health.headers["Vary"]
+    assert "Retry-After" in cors_health.headers["Access-Control-Expose-Headers"]
+    assert "WWW-Authenticate" in cors_health.headers["Access-Control-Expose-Headers"]
+
+    denied_cors_health = client.get(
+        "/api/health",
+        headers={"Origin": "https://untrusted.example"},
+    )
+    assert denied_cors_health.status_code == 200
+    assert "Access-Control-Allow-Origin" not in denied_cors_health.headers
 
     options = client.get("/api/options")
     assert options.status_code == 200
@@ -540,27 +644,23 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
 
     index = client.get("/")
     assert index.status_code == 200
-    assert "TRADING" in index.text and "AGENTS" in index.text
-    assert index.text.count('src="/logo.png"') == 2
-    assert '<link rel="icon" type="image/png" href="/logo.png">' in index.text
-
-    logo = client.get("/logo.png")
-    assert logo.status_code == 200
-    assert logo.headers["content-type"] == "image/png"
-    assert logo.content.startswith(b"\x89PNG\r\n\x1a\n")
-
-    markdown_renderer = client.get("/report-markdown.js")
-    assert markdown_renderer.status_code == 200
-    assert "javascript" in markdown_renderer.headers["content-type"]
-    assert "renderReportMarkdown" in markdown_renderer.text
-    assert "innerHTML" not in markdown_renderer.text
-    assert 'parsed.protocol === "http:" || parsed.protocol === "https:"' in markdown_renderer.text
-
-    app_script = client.get("/app.js")
-    assert app_script.status_code == 200
-    assert app_script.text.count("renderReportMarkdown(") == 2
-    assert "narrativeBody.append(renderReportMarkdown(narrative))" in app_script.text
-    assert 'createElement("pre", "decision-narrative"' not in app_script.text
+    assert index.headers["content-type"].startswith("application/json")
+    assert index.json() == {
+        "service": "tradingagents-api",
+        "status": "ok",
+        "health": "/api/health",
+        "docs": "/api/docs",
+        "message": "The frontend is a separate application; this process serves the backend API only.",
+    }
+    for removed_asset in (
+        "/index.html",
+        "/app.js",
+        "/auth.js",
+        "/report-markdown.js",
+        "/styles.css",
+        "/logo.png",
+    ):
+        assert client.get(removed_asset).status_code == 404
 
 
 def test_web_api_accepts_local_llama_without_google_key(monkeypatch, tmp_path):
@@ -624,7 +724,7 @@ def test_web_api_rejects_another_model_for_local_provider(monkeypatch, tmp_path)
 
     assert response.status_code == 422
     assert response.json()["detail"] == (
-        "The local dashboard provider requires the TradingAgents Llama 3.2 "
+        "The local API provider requires the TradingAgents Llama 3.2 "
         "16K model for both the quick and deep model."
     )
     assert store.list_runs() == []
@@ -659,7 +759,7 @@ def test_web_api_rejects_a_third_provider_before_runtime_validation(tmp_path):
 
     assert response.status_code == 422
     assert response.json()["detail"] == (
-        "The web dashboard supports only Google Gemini and "
+        "The TradingAgents API supports only Google Gemini and "
         "Llama 3.2 3B through the local Ollama server."
     )
     assert store.list_runs() == []

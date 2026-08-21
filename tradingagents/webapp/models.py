@@ -1,4 +1,4 @@
-"""API models and validation for the TradingAgents web application."""
+"""API models and validation for the TradingAgents backend service."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class RunRequest(BaseModel):
 
     API credentials intentionally are not accepted by this model. They must be
     configured server-side in ``.env`` so they can never be echoed into a run
-    document or browser response.
+    document or API response.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)

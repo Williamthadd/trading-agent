@@ -89,7 +89,7 @@ _DEFAULT = ModelCapabilities(
     preferred_structured_method="function_calling",
 )
 
-# The dashboard's pinned Ollama alias runs Llama 3.2 through Ollama's
+# The API's pinned Ollama alias runs Llama 3.2 through Ollama's
 # OpenAI-compatible endpoint. Empirical validation on the target machine shows
 # that json_schema is both valid and more reliable than asking this 3B model to
 # emit a schema as a forced function call. Analyst tools still use bind_tools;

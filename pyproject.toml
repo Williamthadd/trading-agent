@@ -39,8 +39,14 @@ dev = [
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
-# Browser dashboard and optional Firestore persistence. Kept as an extra so the
-# core CLI installation remains lightweight.
+# Backend API, Firebase Authentication, and optional Firestore persistence.
+# Kept as an extra so the core CLI installation remains lightweight.
+api = [
+    "fastapi>=0.115.0",
+    "firebase-admin>=6.6.0",
+    "uvicorn>=0.30.0",
+]
+# Backward-compatible alias for existing installations and documentation.
 web = [
     "fastapi>=0.115.0",
     "firebase-admin>=6.6.0",
@@ -49,6 +55,7 @@ web = [
 
 [project.scripts]
 tradingagents = "cli.main:app"
+tradingagents-api = "tradingagents.webapp.main:cli"
 tradingagents-web = "tradingagents.webapp.main:cli"
 
 [tool.setuptools.packages.find]
@@ -56,7 +63,6 @@ include = ["tradingagents*", "cli*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
-"tradingagents.webapp" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

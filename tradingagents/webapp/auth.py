@@ -1,4 +1,4 @@
-"""Firebase Authentication boundary for the browser dashboard."""
+"""Firebase Authentication boundary for TradingAgents API clients."""
 
 from __future__ import annotations
 

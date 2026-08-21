@@ -1,15 +1,23 @@
 # Setup Firebase untuk history TradingAgents
 
-Web UI menyimpan run dan respons agent ke Cloud Firestore jika kredensial
-server valid tersedia. Jika Firebase belum disiapkan atau gagal diakses, UI
-tetap berjalan dan otomatis memakai JSON lokal di
+Backend API menyimpan run dan respons agent ke Cloud Firestore jika kredensial
+server valid tersedia. Frontend React membaca data tersebut hanya melalui API.
+Jika Firebase belum disiapkan atau gagal diakses, backend tetap berjalan dan
+otomatis memakai JSON lokal di
 `~/.tradingagents/web_history` (atau lokasi `WEB_LOCAL_DATA_DIR`).
 
-Dashboard juga mewajibkan Firebase Authentication sebelum options, analisis,
-respons agent, atau history dapat diakses. Setelah database dan service account
-di dokumen ini siap, lanjutkan ke
+Frontend juga mewajibkan Firebase Authentication sebelum options, analisis,
+respons agent, atau history dapat diakses. Setiap request yang dilindungi harus
+mengirim Firebase ID token sebagai Bearer token ke backend. Setelah database dan
+service account di dokumen ini siap, lanjutkan ke
 [`FIREBASE_AUTH_SETUP.md`](FIREBASE_AUTH_SETUP.md) untuk mengaktifkan login
 Google dan email/password.
+
+Backend FastAPI dan Bloomberg-style React UI adalah dua aplikasi terpisah.
+Backend berjalan di `http://127.0.0.1:8000`, sedangkan frontend development
+berjalan di `http://localhost:5173`. Gunakan
+[`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md) untuk membuat frontend
+React + Vite di repository terpisah.
 
 Arsitektur datanya:
 
@@ -83,6 +91,9 @@ FIREBASE_CREDENTIALS_PATH=secrets/firebase-service-account.json
 FIREBASE_DATABASE_ID=(default)
 FIREBASE_COLLECTION=trading_runs
 
+# Origin frontend yang diizinkan memanggil backend API secara exact-match.
+WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+
 # Opsional: pindahkan fallback history lokal.
 # WEB_LOCAL_DATA_DIR=W:/AI/Agent/TradingAgents/.local/web_history
 ```
@@ -100,14 +111,17 @@ Catatan:
   `FIREBASE_COLLECTION=trading_runs` kecuali Anda memang membuat database atau
   namespace collection lain.
 - Set `FIREBASE_ENABLED=false` untuk sengaja memaksa penyimpanan JSON lokal.
-- Restart web server setiap kali `.env` berubah.
+- `WEB_CORS_ORIGINS` berisi origin HTTP(S) lengkap, termasuk port, yang
+  dipisahkan koma. Jangan gunakan wildcard `*`, path, credentials, query, atau
+  fragment. CORS tidak menggantikan autentikasi Bearer.
+- Restart backend API setiap kali `.env` berubah.
 
-Pastikan dependency web/Firebase proyek sudah terpasang. Aktifkan environment
-Conda lalu instal extra `web` yang disediakan project:
+Pastikan dependency API/Firebase proyek sudah terpasang. Aktifkan environment
+Conda lalu instal extra `api` yang disediakan project:
 
 ```powershell
 conda activate tradingagents
-python -m pip install -e ".[web]"
+python -m pip install -e ".[api]"
 ```
 
 Import Firebase dibuat lazy, sehingga CLI TradingAgents biasa tetap dapat
@@ -178,27 +192,35 @@ Firebase menjelaskan deployment parsial Firestore dan rules pada
 Deploy dari CLI dapat menimpa rules yang diedit di console; pilih satu sumber
 utama dan selalu sinkronkan perubahan.
 
-## 5. Jalankan dan verifikasi
+## 5. Jalankan backend dan verifikasi
 
 Dari root repository:
 
 ```powershell
 conda activate tradingagents
-python -m tradingagents.webapp.main
+python -m pip install -e ".[api]"
+tradingagents-api
 ```
 
-Jika entry point paket sudah terpasang, command pendek berikut juga tersedia:
-
-```powershell
-tradingagents-web
-```
-
-Buka `http://127.0.0.1:8000`. Status koneksi dapat dicek di:
+Backend API berjalan di `http://127.0.0.1:8000`. Root URL berisi informasi
+service API dan tidak menyajikan frontend. Status koneksi dapat dicek di:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/health |
   ConvertTo-Json -Depth 5
 ```
+
+Jalankan frontend React dari repository terpisah pada terminal kedua. Frontend
+harus memiliki konfigurasi berikut:
+
+```dotenv
+VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
+```
+
+Kemudian jalankan `npm install` dan `npm run dev`, lalu buka
+`http://localhost:5173`. Pertahankan kedua proses selama menggunakan aplikasi.
+Instruksi pembuatan, pengujian, dan struktur frontend ada di
+[`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md).
 
 Storage yang berhasil memakai Firebase akan menunjukkan nilai ekuivalen dengan:
 
@@ -232,10 +254,11 @@ print({"backend": store.backend_name, "configured": store.configured})
 '@ | python -
 ```
 
-Setelah membuat satu analisis dari UI, buka **Firestore Database > Data** di
+Setelah membuat satu analisis dari frontend React, buka **Firestore Database >
+Data** di
 Firebase Console. Anda seharusnya melihat collection `trading_runs`, sebuah
 dokumen run, dan subcollection `events`. History tetap ditampilkan per hari di
-UI berdasarkan `date_key`.
+frontend berdasarkan `date_key`.
 
 ## Keamanan dan biaya
 
@@ -243,15 +266,18 @@ UI berdasarkan `date_key`.
   Firestore. Browser menerima Firebase **Web App config** (identifier publik)
   untuk login, tetapi tidak pernah menerima service-account key, API key LLM,
   atau akses Firestore langsung.
-- API memverifikasi Firebase ID token sebelum mengizinkan options, run, polling,
-  dan history. Tetap gunakan TLS dan rate limiting saat diekspos ke jaringan;
-  login tidak membatasi seberapa banyak kuota LLM yang dapat dipakai akun sah.
-- Backend web menjalankan analisis secara serial dan membatasi antrean melalui
+- Frontend mengirim `Authorization: Bearer <Firebase ID token>` pada setiap
+  request options, run, polling, dan history. API memverifikasi token tersebut.
+  Tetap gunakan TLS dan rate limiting saat diekspos ke jaringan; login tidak
+  membatasi seberapa banyak kuota LLM yang dapat dipakai akun sah.
+- Izinkan hanya origin frontend yang diperlukan melalui `WEB_CORS_ORIGINS`.
+  Jangan gunakan wildcard, dan jangan menganggap CORS sebagai autentikasi.
+- Backend API menjalankan analisis secara serial dan membatasi antrean melalui
   `WEB_RUN_QUEUE_LIMIT` (default `4`). Rekonsiliasi startup default mengasumsikan
   hanya satu instance server. Jika beberapa instance sengaja memakai Firestore
   yang sama, set `WEB_RECONCILE_STALE_RUNS=false` dan gunakan mekanisme ownership
   atau job queue eksternal. Untuk deployment lokal yang didukung, gunakan
-  launcher `tradingagents-web` dengan satu worker; jangan menambahkan
+  launcher `tradingagents-api` dengan satu worker; jangan menambahkan
   `uvicorn --workers 2` atau lebih.
 - Secara default URL Ollama/OpenAI-compatible dari request harus sama dengan
   endpoint yang telah dikonfigurasi server. Jangan aktifkan
@@ -290,8 +316,8 @@ Periksa berurutan:
 6. database Firestore `(default)` sudah benar-benar dibuat;
 7. koneksi jaringan ke Google APIs tidak diblokir proxy/firewall.
 
-Lihat warning pada terminal web server. Storage sengaja beralih ke JSON lokal
-ketika inisialisasi atau operasi Firestore gagal agar UI tidak berhenti.
+Lihat warning pada terminal backend API. Storage sengaja beralih ke JSON lokal
+ketika inisialisasi atau operasi Firestore gagal agar frontend tidak berhenti.
 
 ### `ModuleNotFoundError: firebase_admin`
 

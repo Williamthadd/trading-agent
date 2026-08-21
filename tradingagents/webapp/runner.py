@@ -176,7 +176,7 @@ def _redact_secrets(value: Any, sensitive_environment_values: tuple[str, ...]) -
 
 
 def redact_secrets(value: Any) -> Any:
-    """Recursively remove common credentials before browser/storage exposure.
+    """Recursively remove common credentials before API/storage exposure.
 
     Environment variables are inspected once per payload instead of once for
     every scalar field. Large polling responses can contain thousands of
@@ -541,7 +541,7 @@ class RunManager:
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         self._evict_expired_terminal_runs()
         # Polling an active run must stay in memory. Reading its Firestore event
-        # subcollection on every browser poll would repeatedly bill all events
+        # subcollection on every frontend poll would repeatedly bill all events
         # accumulated so far. Storage is consulted only for runs not owned by
         # this process (for example, history restored after a restart).
         with self._lock:
@@ -551,7 +551,7 @@ class RunManager:
         if live is not None:
             # Live records and events are sanitized before entering the cache.
             # Avoid recursively redacting, de-duplicating, and reconstructing
-            # the entire growing response on every 1.6-second browser poll.
+            # the entire growing response on every 1.6-second frontend poll.
             live["events"] = sorted(
                 live_events,
                 key=lambda event: (event.get("sequence", 0), event.get("created_at", "")),

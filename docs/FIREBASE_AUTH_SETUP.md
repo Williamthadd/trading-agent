@@ -1,8 +1,10 @@
 # Setup Firebase Authentication untuk TradingAgents
 
 TradingAgents menyediakan **login saja**, tanpa tombol atau endpoint register.
-Metode yang tersedia adalah Google dan email/password. Sesudah login, browser
-mengirim Firebase ID token sebagai Bearer token; Python Firebase Admin SDK
+Metode yang tersedia adalah Google dan email/password. Aplikasi React berjalan
+sebagai frontend terpisah, sedangkan FastAPI hanya melayani backend API. Sesudah
+login, frontend mengirim Firebase ID token sebagai `Authorization: Bearer
+<token>` pada setiap request API yang dilindungi; Python Firebase Admin SDK
 memverifikasi token tersebut sebelum mengizinkan akses konfigurasi analisis,
 run, respons agent, dan history.
 
@@ -18,7 +20,7 @@ memiliki:
 - project Firebase dan database Firestore;
 - `secrets/firebase-service-account.json`;
 - `FIREBASE_PROJECT_ID` dan `FIREBASE_CREDENTIALS_PATH` di `.env`;
-- dependency `firebase-admin` melalui `pip install -e ".[web]"`.
+- dependency `firebase-admin` melalui `pip install -e ".[api]"`.
 
 ## 1. Daftarkan Firebase Web App
 
@@ -26,8 +28,9 @@ memiliki:
    project yang sama dengan service account.
 2. Buka ikon roda gigi **Project settings > General**.
 3. Pada **Your apps**, klik ikon Web `</>` atau **Add app > Web**.
-4. Isi nickname, misalnya `TradingAgents Web`. Firebase Hosting tidak wajib
-   dicentang karena UI dilayani FastAPI.
+4. Isi nickname, misalnya `TradingAgents React`. Firebase Hosting tidak wajib
+   dicentang. Frontend React dijalankan atau di-host sebagai aplikasi terpisah;
+   backend FastAPI tidak menyajikan Bloomberg UI.
 5. Klik **Register app**.
 6. Firebase menampilkan objek `firebaseConfig`. Salin nilainya apa adanya;
    jangan menyalin baris JavaScript ke `.env`.
@@ -57,14 +60,17 @@ Referensi resmi:
 1. Buka **Authentication > Settings > Authorized domains**.
 2. Untuk development lokal, tambahkan `localhost` bila belum ada. Project yang
    dibuat setelah 28 April 2025 tidak selalu menambahkannya otomatis.
-3. Jika UI dibuka dari host LAN atau domain produksi, tambahkan hostname-nya
-   tanpa path, misalnya `trading.example.com`.
+3. Jika frontend dibuka dari host LAN atau domain produksi, tambahkan hostname
+   **frontend** tanpa scheme, port, atau path, misalnya `trading.example.com`.
+   Hostname backend API bukan Authorized Domain kecuali halaman login memang
+   dijalankan dari hostname yang sama.
 4. Jangan menambahkan domain yang tidak Anda kontrol. Hapus `localhost` dari
    project produksi bila tidak diperlukan.
 
-Port tidak ditulis pada daftar domain. `http://127.0.0.1:8000` sebaiknya dibuka
-sebagai `http://localhost:8000` saat menguji Google login, atau tambahkan domain
-yang benar-benar ditampilkan oleh error Firebase. Lihat
+Port tidak ditulis pada daftar domain. Untuk setup lokal yang didukung, buka
+frontend di `http://localhost:5173` dan tambahkan `localhost`; backend tetap
+berjalan di `http://127.0.0.1:8000`. Jika Firebase menampilkan error domain,
+tambahkan hostname frontend yang benar-benar tercantum pada error. Lihat
 [Firebase Authentication FAQ tentang authorized domains](https://firebase.google.com/support/faq#auth-allowed-domains).
 
 ## 4. Isi Web App config di `.env`
@@ -73,6 +79,9 @@ Edit `.env` (bukan `.env.example`) dan petakan nilai dari `firebaseConfig`:
 
 ```dotenv
 WEB_AUTH_REQUIRED=true
+
+# Origin frontend React yang boleh memanggil backend API. Origin harus persis.
+WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 # firebaseConfig.apiKey
 FIREBASE_WEB_API_KEY=AIza...
@@ -97,10 +106,18 @@ Empat nilai wajib adalah `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN`,
 browser oleh Firebase dan bukan pengganti rules atau autentikasi. Jangan pernah
 memasukkan isi service-account JSON ke variabel `FIREBASE_WEB_*`.
 
+`WEB_CORS_ORIGINS` adalah daftar origin HTTP(S) yang dipisahkan koma, termasuk
+scheme dan port tetapi tanpa path. Jangan gunakan wildcard `*`, credentials,
+query, atau fragment. Trailing slash akan dinormalisasi; format canonical tanpa
+slash tetap disarankan. CORS diperiksa secara exact-match setelah normalisasi dan
+tidak menggantikan verifikasi Bearer token. Jika frontend production berada di
+`https://trading.example.com`, gunakan origin tersebut alih-alih origin Vite
+lokal, atau cantumkan keduanya bila keduanya memang perlu diizinkan.
+
 `WEB_AUTH_ALLOWED_EMAILS` bersifat case-insensitive. Jika kosong, setiap user
 valid di Firebase project dapat memakai backend. Ini terutama penting untuk
 Google: login federasi pertama dapat membuat record user Firebase secara
-otomatis walaupun dashboard tidak memiliki tombol register.
+otomatis walaupun frontend tidak memiliki tombol register.
 
 ## 5. Buat user email/password tanpa halaman register
 
@@ -112,57 +129,79 @@ otomatis walaupun dashboard tidak memiliki tombol register.
 
 Firebase Console memang mendukung pembuatan password user melalui **Add user**;
 lihat [Manage Users](https://firebase.google.com/docs/auth/web/manage-users#create_a_user).
-Dashboard hanya memanggil `signInWithEmailAndPassword` dan tidak memanggil API
-pembuatan user.
+Frontend React hanya memanggil `signInWithEmailAndPassword` dan tidak memanggil
+API pembuatan user.
 
 Untuk user Google, cukup masukkan alamat Google yang disetujui ke
 `WEB_AUTH_ALLOWED_EMAILS`. User memilih tombol **Continue with Google** pada
-login page.
+halaman login frontend.
 
-## 6. Jalankan dan verifikasi
+## 6. Jalankan backend dan frontend
 
-Restart server agar `.env` dibaca ulang:
+Restart backend agar `.env` dibaca ulang. Jalankan dari terminal repository
+TradingAgents:
 
 ```powershell
 conda activate tradingagents
-python -m pip install -e ".[web]"
-tradingagents-web
+python -m pip install -e ".[api]"
+tradingagents-api
 ```
 
-Buka `http://localhost:8000`. Hasil yang benar:
+Backend API tersedia di `http://127.0.0.1:8000`; root URL menampilkan metadata
+API, bukan Bloomberg UI. Buat frontend React + Vite di repository terpisah
+dengan panduan lengkap [`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md).
+Pada frontend tersebut, arahkan API dan jalankan Vite:
 
-1. login page tampil; workspace tidak terlihat;
+```dotenv
+VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
+```
+
+```powershell
+npm install
+npm run dev
+```
+
+Buka `http://localhost:5173`. Kedua proses harus tetap berjalan. Hasil yang
+benar:
+
+1. halaman login frontend tampil; workspace tidak terlihat;
 2. email/password yang dibuat di Console dapat login;
 3. tombol Google membuka pemilih akun;
 4. akun di luar allowlist mendapat pesan ditolak;
 5. sesudah login, workspace dan history tampil;
-6. tombol **LOGOUT** kembali ke login page.
+6. tombol **LOGOUT** kembali ke halaman login frontend.
 
 Pemeriksaan API tanpa token harus menghasilkan `401`:
 
 ```powershell
 try {
-  Invoke-RestMethod http://localhost:8000/api/options
+  Invoke-RestMethod http://127.0.0.1:8000/api/options
 } catch {
   $_.Exception.Response.StatusCode.value__
 }
 ```
 
-Endpoint bootstrap berikut memang publik agar login page dapat dimulai:
+Endpoint bootstrap berikut memang publik agar halaman login frontend dapat
+dimulai:
 
 ```powershell
-Invoke-RestMethod http://localhost:8000/api/auth/config |
+Invoke-RestMethod http://127.0.0.1:8000/api/auth/config |
   ConvertTo-Json -Depth 5
 ```
 
 Pastikan `configured` bernilai `true`. Output ini berisi Web App config publik,
-bukan service-account key. `/api/health`, file HTML/CSS/JS, dan dokumentasi API
-juga publik; semua endpoint yang membaca data atau menjalankan agent dilindungi.
+bukan service-account key. Root API, `/api/health`, `/api/auth/config`,
+dokumentasi OpenAPI, dan preflight CORS bersifat publik. `/api/auth/session`,
+options, run, polling, serta history wajib menerima Firebase ID token melalui
+header Bearer. FastAPI tidak lagi menyajikan file HTML/CSS/JS frontend.
 
 ## 7. Keamanan deployment
 
 - Gunakan HTTPS pada deployment jaringan/production agar ID token dan session
   tidak melintasi jaringan dalam plaintext.
+- Batasi `WEB_CORS_ORIGINS` ke origin frontend yang benar-benar dipercaya.
+  Jangan gunakan `*`; CORS bukan autentikasi dan setiap endpoint yang dilindungi
+  tetap wajib memverifikasi Bearer token.
 - Pertahankan `firebase/firestore.rules` dalam mode deny-all. Backend Admin SDK
   melewati rules melalui IAM; browser tidak membutuhkan Firestore SDK.
 - Isi `WEB_AUTH_ALLOWED_EMAILS` untuk server privat. Menonaktifkan user di
@@ -175,9 +214,11 @@ juga publik; semua endpoint yang membaca data atau menjalankan agent dilindungi.
   Jangan gunakan nilai tersebut pada host bersama atau production.
 - Terapkan rate limiting pada reverse proxy. User yang sah tetap dapat
   menghabiskan kuota data vendor atau LLM.
-- Frontend memuat Firebase JS SDK dari `www.gstatic.com`. Firewall atau Content
-  Security Policy harus mengizinkan origin tersebut serta endpoint Firebase
-  Authentication.
+- Frontend React memakai Firebase JavaScript SDK untuk Authentication saja.
+  Firewall atau Content Security Policy harus mengizinkan endpoint Firebase
+  Authentication yang diperlukan. Service-account JSON hanya berada pada host
+  backend dan tidak boleh disalin ke repository, build, atau environment
+  frontend.
 
 Firebase merekomendasikan mengirim ID token client melalui HTTPS dan
 memverifikasinya dengan Admin SDK pada custom backend; lihat
@@ -193,12 +234,20 @@ field `missing`. Restart server sesudah mengubah `.env`.
 ### `auth/unauthorized-domain`
 
 Tambahkan hostname aplikasi ke **Authentication > Settings > Authorized
-domains**. Untuk project baru, tambahkan `localhost` secara manual.
+domains**. Gunakan hostname frontend, bukan URL backend. Untuk Vite lokal,
+tambahkan `localhost` secara manual dan buka `http://localhost:5173`.
 
 ### Login Google popup tidak muncul
 
-Izinkan popup untuk origin aplikasi, pastikan provider Google sudah enabled,
-dan periksa bahwa browser/firewall dapat memuat `www.gstatic.com`.
+Izinkan popup untuk origin frontend, pastikan provider Google sudah enabled,
+dan periksa bahwa browser/firewall dapat menjangkau Firebase Authentication.
+
+### Browser menampilkan error CORS
+
+Pastikan origin yang terlihat di address bar frontend tercantum persis pada
+`WEB_CORS_ORIGINS`. `http://localhost:5173` dan
+`http://127.0.0.1:5173` adalah dua origin berbeda. Jangan memperbaikinya dengan
+wildcard; ubah daftar origin lalu restart `tradingagents-api`.
 
 ### Email/password selalu ditolak
 
