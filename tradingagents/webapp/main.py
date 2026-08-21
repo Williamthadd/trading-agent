@@ -5,7 +5,7 @@ from datetime import date as date_type
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Path as ApiPath, Query, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -13,13 +13,6 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients.model_catalog import MODEL_OPTIONS
 
 from . import __version__
-from .auth import (
-    AuthenticationConfigurationError,
-    AuthenticationForbidden,
-    FirebaseAuthManager,
-    InvalidAuthenticationToken,
-    TokenVerifier,
-)
 from .models import ANALYSTS, RESEARCH_DEPTHS, HealthResponse, RunRequest
 from .runner import (
     RunManager,
@@ -27,26 +20,14 @@ from .runner import (
     RunStoreUnavailable,
     RuntimeConfigurationError,
 )
+from .security import (
+    AuthorizationConfigurationError,
+    AuthorizationForbidden,
+    FirebaseBearerAuthorizer,
+    InvalidAuthorizationToken,
+    TokenVerifier,
+)
 from .storage import build_run_store
-
-
-def _public_backend_url(value: Any) -> str | None:
-    """Return a browser-safe HTTP(S) endpoint without embedded credentials."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    candidate = value.strip().rstrip("/")
-    parsed = urlsplit(candidate)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    return candidate
-
 
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
@@ -212,18 +193,6 @@ def _defaults() -> dict[str, Any]:
     return defaults
 
 
-def _valid_date(value: str | None) -> str | None:
-    if value is None:
-        return None
-    try:
-        return date_type.fromisoformat(value).isoformat()
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="date must use YYYY-MM-DD format",
-        ) from exc
-
-
 def create_app(
     store: Any | None = None,
     *,
@@ -236,17 +205,20 @@ def create_app(
     cors_origins = _cors_origins()
     run_store = store or build_run_store()
     manager = RunManager(run_store)
-    auth_manager = FirebaseAuthManager(required=auth_required, token_verifier=token_verifier)
+    authorizer = FirebaseBearerAuthorizer(
+        required=auth_required,
+        token_verifier=token_verifier,
+    )
     api = FastAPI(
         title="TradingAgents API",
-        description="Authenticated orchestration and polling API for the TradingAgents graph.",
+        description="Authorized analysis-launch API for the TradingAgents graph.",
         version=__version__,
         docs_url="/api/docs",
         redoc_url=None,
         openapi_url="/api/openapi.json",
     )
     api.state.run_manager = manager
-    api.state.auth_manager = auth_manager
+    api.state.api_authorizer = authorizer
     api.state.cors_origins = cors_origins
     api.add_middleware(
         CORSMiddleware,
@@ -274,16 +246,16 @@ def create_app(
             f"{credentials.scheme} {credentials.credentials}" if credentials is not None else None
         )
         try:
-            return auth_manager.authenticate(authorization)
-        except InvalidAuthenticationToken as exc:
+            return authorizer.authorize(authorization)
+        except InvalidAuthorizationToken as exc:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=str(exc),
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
-        except AuthenticationForbidden as exc:
+        except AuthorizationForbidden as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-        except AuthenticationConfigurationError as exc:
+        except AuthorizationConfigurationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
@@ -308,14 +280,6 @@ def create_app(
             "storage": manager.storage_info,
             "active_runs": manager.active_count,
         }
-
-    @api.get("/api/auth/config", tags=["authentication"])
-    def auth_config() -> dict[str, Any]:
-        return auth_manager.public_config
-
-    @api.get("/api/auth/session", tags=["authentication"])
-    def auth_session(user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[str, Any]:
-        return {"authenticated": True, "user": user}
 
     @api.get("/api/options", tags=["system"])
     def options(_user: Annotated[dict[str, Any], Depends(require_user)]) -> dict[str, Any]:
@@ -382,44 +346,6 @@ def create_app(
                 detail=str(exc),
                 headers={"Retry-After": "5"},
             ) from exc
-
-    @api.get("/api/runs/{run_id}", tags=["runs"])
-    def get_run(
-        _user: Annotated[dict[str, Any], Depends(require_user)],
-        run_id: str = ApiPath(pattern=r"^[a-f0-9]{32}$"),
-    ) -> dict[str, Any]:
-        try:
-            result = manager.get_run(run_id)
-        except RunStoreUnavailable as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Run storage is temporarily unavailable: {exc}",
-            ) from exc
-        if result is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-        return result
-
-    @api.get("/api/history", tags=["history"])
-    def history(
-        _user: Annotated[dict[str, Any], Depends(require_user)],
-        date: str | None = Query(default=None, description="Creation day in YYYY-MM-DD"),
-    ) -> dict[str, Any]:
-        date_key = _valid_date(date)
-        try:
-            runs = manager.list_runs(date_key)
-        except RunStoreUnavailable as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Run storage is temporarily unavailable: {exc}",
-            ) from exc
-        return {"date": date_key, "count": len(runs), "runs": runs}
-
-    @api.get("/api/history/{run_id}", tags=["history"])
-    def history_detail(
-        _user: Annotated[dict[str, Any], Depends(require_user)],
-        run_id: str = ApiPath(pattern=r"^[a-f0-9]{32}$"),
-    ) -> dict[str, Any]:
-        return get_run(_user, run_id)
 
     return api
 

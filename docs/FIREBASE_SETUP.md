@@ -1,69 +1,75 @@
-# Setup Firebase untuk history TradingAgents
+# Setup Cloud Firestore untuk TradingAgents
 
-Backend API menyimpan run dan respons agent ke Cloud Firestore jika kredensial
-server valid tersedia. Frontend React membaca data tersebut hanya melalui API.
-Jika Firebase belum disiapkan atau gagal diakses, backend tetap berjalan dan
-otomatis memakai JSON lokal di
-`~/.tradingagents/web_history` (atau lokasi `WEB_LOCAL_DATA_DIR`).
+TradingAgents memakai Cloud Firestore sebagai penghubung data antara dua
+aplikasi yang terpisah:
 
-Frontend juga mewajibkan Firebase Authentication sebelum options, analisis,
-respons agent, atau history dapat diakses. Setiap request yang dilindungi harus
-mengirim Firebase ID token sebagai Bearer token ke backend. Setelah database dan
-service account di dokumen ini siap, lanjutkan ke
-[`FIREBASE_AUTH_SETUP.md`](FIREBASE_AUTH_SETUP.md) untuk mengaktifkan login
-Google dan email/password.
+```text
+React frontend -- Firebase Web SDK --> Authentication + read-only history
+FastAPI backend -- Firebase Admin SDK -> run, progress, reports, dan decision
+```
 
-Backend FastAPI dan Bloomberg-style React UI adalah dua aplikasi terpisah.
-Backend berjalan di `http://127.0.0.1:8000`, sedangkan frontend development
-berjalan di `http://localhost:5173`. Gunakan
-[`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md) untuk membuat frontend
-React + Vite di repository terpisah.
+Login dan pembacaan history dilakukan langsung oleh frontend. Karena itu login
+dan history tetap bekerja ketika FastAPI berhenti. Backend hanya diperlukan
+untuk mengambil options runtime dan memulai analisis baru.
 
-Arsitektur datanya:
+Repository Python ini tidak lagi memiliki `firebase.json`, `.firebaserc`, file
+Security Rules, atau file indexes. Semua konfigurasi deployment Firestore
+tersebut harus berada di repository frontend yang dibuat menggunakan
+[`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md). Jangan membuat sumber
+rules kedua di repository backend.
+
+Struktur data yang dipakai adalah:
 
 ```text
 trading_runs/{run_id}
-└── events/{event_id}
+`-- events/{event_id}
+
+tradingagents_members/{firebase_uid}
 ```
 
-Dokumen run menyimpan metadata seperti ticker, status, `date_key`, dan waktu.
-Subcollection `events` menyimpan progres serta respons tiap agent. History per
-hari menggunakan field `date_key` dalam format `YYYY-MM-DD`.
+- Dokumen run berisi ticker, status, `date_key`, progress, keputusan, dan
+  timestamps.
+- Subcollection `events` berisi progress, respons agent, dan report lengkap.
+- Dokumen membership menentukan UID yang boleh membaca shared history.
+- Browser hanya membaca. Seluruh create, update, dan delete dari browser
+  ditolak oleh Security Rules.
+- Backend memakai Admin SDK dan menulis melalui IAM, sehingga tidak bergantung
+  pada izin client di Security Rules.
 
-## 1. Buat project dan database
+History yang ada sekarang bersifat bersama untuk semua UID yang menjadi member,
+bukan history privat per user. Schema run belum memiliki `owner_uid`.
+
+## 1. Buat project dan database Firestore
 
 1. Buka [Firebase Console](https://console.firebase.google.com/) dan pilih
-   **Add project**. Catat **Project ID**; ini berbeda dari nama tampilan
-   project.
-2. Di project tersebut, buka **Databases & Storage > Firestore** (pada beberapa
-   tampilan: **Build > Firestore Database**), lalu klik **Create database** atau
-   **Add database**.
-3. Pilih **Standard edition** dan gunakan database ID `(default)`.
-4. Pilih lokasi yang dekat dengan server/pengguna. Lokasi database tidak dapat
-   diubah setelah database dibuat, jadi tentukan dengan hati-hati. Lihat
-   [panduan lokasi Firestore resmi](https://firebase.google.com/docs/firestore/locations).
-5. Pilih **Production mode**, kemudian klik **Create**. Production mode menolak
-   akses mobile/web client, tetapi server terautentikasi tetap dapat mengakses
-   Firestore. Langkah console terbaru dijelaskan pada
-   [Manage databases](https://firebase.google.com/docs/firestore/manage-databases#console).
+   **Add project**. Catat **Project ID**, bukan hanya nama tampilan project.
+2. Buka **Build > Firestore Database**, lalu pilih **Create database**.
+3. Pilih **Standard edition** dan database ID `(default)`.
+4. Pilih lokasi yang dekat dengan laptop atau pengguna. Lokasi tidak dapat
+   diubah setelah database dibuat. Lihat
+   [Firestore locations](https://firebase.google.com/docs/firestore/locations).
+5. Pilih **Production mode**, lalu selesaikan pembuatan database.
 
-Tidak perlu membuat collection secara manual. Collection `trading_runs` dan
-subcollection `events` dibuat ketika run pertama disimpan.
+Collection tidak perlu dibuat sekarang. Backend akan membuat `trading_runs`
+dan `events` pada analisis pertama. Collection membership dibuat pada langkah
+Security Rules di bawah.
 
-## 2. Buat service-account key
+Gunakan database `(default)` kecuali backend dan frontend sengaja dikonfigurasi
+untuk database bernama yang sama. Nilai database yang tidak sama menyebabkan
+frontend melihat history kosong atau `permission-denied` walaupun project ID
+benar.
 
-1. Di Firebase Console, buka ikon roda gigi **Project settings**.
-2. Buka tab **Service accounts**, lalu bagian **Firebase Admin SDK**.
-3. Klik **Generate new private key**, konfirmasi **Generate key**, dan simpan
-   file JSON yang diunduh dengan aman. Ini adalah prosedur resmi pada
-   [Firebase Admin SDK setup](https://firebase.google.com/docs/admin/setup#initialize_the_sdk_in_non-google_environments).
-4. Ubah nama dan pindahkan file itu ke lokasi berikut dari root repository:
+## 2. Buat service-account key untuk backend
+
+1. Di Firebase Console, buka **Project settings > Service accounts**.
+2. Pada bagian **Firebase Admin SDK**, klik **Generate new private key**.
+3. Konfirmasi, unduh JSON, lalu simpan sebagai:
 
    ```text
    W:\AI\Agent\TradingAgents\secrets\firebase-service-account.json
    ```
 
-5. Pastikan file ada tanpa menampilkan isi rahasianya:
+4. Verifikasi path dan Project ID tanpa mencetak private key:
 
    ```powershell
    Test-Path .\secrets\firebase-service-account.json
@@ -71,18 +77,23 @@ subcollection `events` dibuat ketika run pertama disimpan.
      ConvertFrom-Json).project_id
    ```
 
-Perintah pertama harus menghasilkan `True`; perintah kedua harus menampilkan
-Project ID yang sama dengan Firebase Console.
+Perintah pertama harus menghasilkan `True`. Project ID dari perintah kedua
+harus sama dengan project Firebase. Prosedur resminya tersedia di
+[Firebase Admin SDK setup](https://firebase.google.com/docs/admin/setup#initialize_the_sdk_in_non-google_environments).
 
-> Service-account JSON adalah kunci privat server. Jangan pernah menaruhnya di
-> JavaScript/browser, folder `static`, Git, Docker image, screenshot, atau chat.
-> Firebase merekomendasikan environment variable untuk menunjuk file key dan
-> meminta key disimpan secara aman; lihat
-> [Add the Firebase Admin SDK to your server](https://firebase.google.com/docs/admin/setup#set-up-project-and-service-account).
+> Service-account JSON adalah private key server. Jangan menaruhnya di
+> repository frontend, variabel `VITE_*`, JavaScript, browser, Git, Docker image,
+> screenshot, log, atau chat.
 
-## 3. Isi `.env`
+Jika IAM service account pernah diubah dan backend mendapat `PermissionDenied`,
+pastikan principal service account tersebut mempunyai izin Firestore yang
+diperlukan pada project yang benar, misalnya role **Cloud Datastore User** untuk
+operasi data backend. Security Rules browser tidak dapat memperbaiki kegagalan
+IAM Admin SDK.
 
-Edit file `.env` yang sudah ada, bukan `.env.example`, lalu tambahkan:
+## 3. Konfigurasikan `.env` backend
+
+Edit `.env` di repository Python, bukan `.env.example`:
 
 ```dotenv
 FIREBASE_ENABLED=true
@@ -91,52 +102,100 @@ FIREBASE_CREDENTIALS_PATH=secrets/firebase-service-account.json
 FIREBASE_DATABASE_ID=(default)
 FIREBASE_COLLECTION=trading_runs
 
-# Origin frontend yang diizinkan memanggil backend API secara exact-match.
+# Frontend yang boleh memanggil API options dan launch.
 WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
-# Opsional: pindahkan fallback history lokal.
+# Backend tetap memverifikasi Firebase ID token hanya untuk operasi analisis.
+WEB_AUTH_REQUIRED=true
+WEB_AUTH_ALLOWED_EMAILS=anda@gmail.com
+
+# Opsional: lokasi persistence fallback backend.
 # WEB_LOCAL_DATA_DIR=W:/AI/Agent/TradingAgents/.local/web_history
 ```
 
-Catatan:
+Catatan penting:
 
-- Ganti hanya `project-id-anda` dengan Project ID sebenarnya.
-- Path relatif dihitung dari working directory ketika server dijalankan. Jika
-  server dijalankan dari folder lain, gunakan path absolut dengan slash `/`,
-  misalnya `W:/AI/Agent/TradingAgents/secrets/firebase-service-account.json`.
-- `GOOGLE_APPLICATION_CREDENTIALS` dapat dipakai sebagai alternatif
-  `FIREBASE_CREDENTIALS_PATH`; cukup gunakan salah satunya. Aplikasi memberi
-  prioritas pada `FIREBASE_CREDENTIALS_PATH`.
-- Pertahankan `FIREBASE_DATABASE_ID=(default)` dan
-  `FIREBASE_COLLECTION=trading_runs` kecuali Anda memang membuat database atau
-  namespace collection lain.
-- Set `FIREBASE_ENABLED=false` untuk sengaja memaksa penyimpanan JSON lokal.
-- `WEB_CORS_ORIGINS` berisi origin HTTP(S) lengkap, termasuk port, yang
-  dipisahkan koma. Jangan gunakan wildcard `*`, path, credentials, query, atau
-  fragment. CORS tidak menggantikan autentikasi Bearer.
-- Restart backend API setiap kali `.env` berubah.
+- Public Firebase Web App config tidak berada di `.env` backend. Nilai tersebut
+  hanya ditaruh sebagai `VITE_FIREBASE_*` pada `.env.local` frontend.
+- `FIREBASE_CREDENTIALS_PATH` dapat diganti dengan
+  `GOOGLE_APPLICATION_CREDENTIALS`; gunakan satu saja. Aplikasi memprioritaskan
+  `FIREBASE_CREDENTIALS_PATH`.
+- Path relatif dihitung dari working directory backend. Gunakan path absolut
+  bila backend dijalankan dari lokasi lain.
+- `FIREBASE_COLLECTION` harus tetap `trading_runs`, sama dengan constant dan
+  rules frontend.
+- Jangan gunakan wildcard pada `WEB_CORS_ORIGINS`. CORS bukan authorization.
+- Restart backend setelah `.env` diubah.
 
-Pastikan dependency API/Firebase proyek sudah terpasang. Aktifkan environment
-Conda lalu instal extra `api` yang disediakan project:
+Pasang dependency backend dari environment Conda project:
 
 ```powershell
 conda activate tradingagents
 python -m pip install -e ".[api]"
 ```
 
-Import Firebase dibuat lazy, sehingga CLI TradingAgents biasa tetap dapat
-berjalan walau `firebase-admin` belum terpasang.
+Dependency `firebase-admin` tetap diperlukan untuk dua hal: menulis Firestore
+dan memverifikasi Bearer token pada `GET /api/options` serta `POST /api/runs`.
+Backend tidak menyediakan halaman login, session endpoint, atau public Web App
+config.
 
-## 4. Kunci Firestore Security Rules
+## 4. Buat konfigurasi Firebase di repository frontend
 
-File [`firebase/firestore.rules`](../firebase/firestore.rules) menolak semua
-akses langsung dari mobile/web client:
+Ikuti [`FIREBASE_AUTH_SETUP.md`](FIREBASE_AUTH_SETUP.md) untuk mendaftarkan Web
+App dan mengaktifkan Google serta email/password. Public config ditempatkan di
+`.env.local` repository React:
+
+```dotenv
+VITE_FIREBASE_API_KEY=nilai-firebaseConfig-apiKey
+VITE_FIREBASE_AUTH_DOMAIN=project-id-anda.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=project-id-anda
+VITE_FIREBASE_APP_ID=nilai-firebaseConfig-appId
+VITE_FIREBASE_DATABASE_ID=(default)
+
+# Opsional, bila tersedia pada firebaseConfig.
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MEASUREMENT_ID=
+
+# Hanya diperlukan untuk menjalankan analisis baru.
+VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
+```
+
+Firebase Web config merupakan identifier publik, tetapi tetap tidak memberikan
+izin membaca data. Firebase Authentication dan Security Rules menentukan akses.
+Service-account JSON dan API key Gemini tidak boleh memakai prefix `VITE_`.
+
+## 5. Buat dan uji Security Rules di frontend
+
+Repository frontend adalah satu-satunya sumber rules. Buat `firestore.rules`
+dengan policy berikut:
 
 ```javascript
 rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function canReadTradingHistory() {
+      return request.auth != null
+        && exists(
+          /databases/$(database)/documents/tradingagents_members/$(request.auth.uid)
+        );
+    }
+
+    match /tradingagents_members/{memberUid} {
+      allow read, write: if false;
+    }
+
+    match /trading_runs/{runId} {
+      allow get, list: if canReadTradingHistory();
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow get, list: if canReadTradingHistory();
+        allow create, update, delete: if false;
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
@@ -144,85 +203,130 @@ service cloud.firestore {
 }
 ```
 
-Ini memang disengaja. Python backend memakai Admin SDK. Server client library
-melewati Firestore Security Rules dan aksesnya dikendalikan oleh IAM, sehingga
-rules `false` tidak memblokir backend. Pola server-only ini secara eksplisit
-didokumentasikan dalam
-[panduan memperbaiki rules yang tidak aman](https://firebase.google.com/docs/firestore/security/insecure-rules#closed_access).
+Rules pada parent document tidak otomatis berlaku pada subcollection. Karena
+itu blok `events` harus ditulis secara eksplisit. Jangan mengganti membership
+dengan hanya `request.auth != null`; itu akan memberi seluruh user Firebase
+project akses ke shared trading history.
 
-### Opsi A — deploy manual dari console
+Buat `firestore.indexes.json`:
 
-1. Buka **Firestore Database > Rules** pada Firebase Console.
-2. Salin seluruh isi `firebase/firestore.rules` ke editor.
-3. Klik **Publish**.
-4. Pastikan tidak ada rule lain yang berisi `allow ...: if true`.
-
-### Opsi B — deploy dengan Firebase CLI
-
-Repository ini sudah menyediakan `firebase.json`, rules, dan file indexes. Instal
-[Firebase CLI](https://firebase.google.com/docs/cli#setup_update_cli), login, lalu
-hubungkan checkout lokal ke project Anda:
-
-```powershell
-npm install -g firebase-tools
-firebase login
-firebase use --add
+```json
+{
+  "indexes": [],
+  "fieldOverrides": []
+}
 ```
 
-Saat `firebase use --add` bertanya:
+Query frontend memakai `where("date_key", "==", selectedDate)` lalu mengurutkan
+hasil di client, sehingga automatic single-field index sudah cukup.
 
-- pilih project Firebase yang tadi dibuat;
-- masukkan alias, misalnya `default`.
+Buat atau gabungkan konfigurasi berikut ke `firebase.json` frontend:
 
-Kemudian deploy rules dan indexes Firestore yang disediakan repository:
-
-```powershell
-firebase deploy --only firestore
+```json
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 4000
+    },
+    "singleProjectMode": true
+  }
+}
 ```
 
-Untuk menghindari salah project, Anda juga dapat menyebut Project ID secara
-eksplisit:
+Prompt frontend meminta test Rules Emulator untuk memastikan:
+
+- user tanpa login tidak dapat membaca run atau events;
+- user login tanpa membership juga tidak dapat membaca;
+- member dapat membaca run dan events;
+- bahkan member tidak dapat menulis run, events, atau membership.
+
+Jalankan test sebelum deploy:
 
 ```powershell
-firebase deploy --only firestore --project project-id-anda
+cd W:\path\ke\repository-frontend
+npm install
+npx firebase login
+npx firebase use --add
+npm run test:rules
 ```
 
-Firebase menjelaskan deployment parsial Firestore dan rules pada
-[Manage and deploy Firebase Security Rules](https://firebase.google.com/docs/rules/manage-deploy#deploy_your_updates).
-Deploy dari CLI dapat menimpa rules yang diedit di console; pilih satu sumber
-utama dan selalu sinkronkan perubahan.
-
-## 5. Jalankan backend dan verifikasi
-
-Dari root repository:
+Pastikan Project ID CLI, `VITE_FIREBASE_PROJECT_ID`, backend
+`FIREBASE_PROJECT_ID`, dan field `project_id` di service-account JSON semuanya
+identik. Frontend dan backend juga harus sama-sama memakai database `(default)`
+untuk kontrak yang didokumentasikan di sini. Kemudian deploy dari repository
+frontend:
 
 ```powershell
+npx firebase deploy --only firestore:rules,firestore:indexes `
+  --project project-id-anda
+```
+
+Deployment dari Console atau CLI dapat saling menimpa. Gunakan file frontend
+sebagai satu-satunya sumber kebenaran. Lihat
+[Manage and deploy Security Rules](https://firebase.google.com/docs/rules/manage-deploy)
+dan [Rules Emulator](https://firebase.google.com/docs/firestore/security/test-rules-emulator).
+
+## 6. Tambahkan UID yang boleh membaca history
+
+Membership dibuat oleh administrator, bukan oleh browser:
+
+1. Aktifkan provider dan buat user mengikuti
+   [`FIREBASE_AUTH_SETUP.md`](FIREBASE_AUTH_SETUP.md).
+2. Untuk email/password, UID langsung tersedia di **Authentication > Users**.
+   Untuk Google, minta user login satu kali agar record user dibuat, lalu buka
+   halaman Users.
+3. Salin nilai **User UID** secara persis.
+4. Buka **Firestore Database > Data**.
+5. Buat collection `tradingagents_members`.
+6. Buat document dengan **Document ID sama persis dengan UID**. Tambahkan field
+   administratif opsional, misalnya `email` dan `added_at`. Rules hanya
+   memeriksa keberadaan document, bukan nilai email di dalamnya.
+7. Pastikan email user yang sama juga ada pada `WEB_AUTH_ALLOWED_EMAILS` di
+   `.env` backend bila user boleh menjalankan analisis.
+8. Refresh frontend. User sekarang dapat membaca history.
+
+Untuk mencabut akses history, hapus document membership tersebut. Untuk
+mencabut kemampuan launch juga, hapus email dari backend allowlist, disable user
+di Authentication, lalu restart backend.
+
+## 7. Jalankan dan verifikasi
+
+Backend:
+
+```powershell
+cd W:\AI\Agent\TradingAgents
 conda activate tradingagents
-python -m pip install -e ".[api]"
 tradingagents-api
 ```
 
-Backend API berjalan di `http://127.0.0.1:8000`. Root URL berisi informasi
-service API dan tidak menyajikan frontend. Status koneksi dapat dicek di:
+Frontend, pada terminal dan repository terpisah:
+
+```powershell
+npm run dev
+```
+
+Login dan history dapat diuji tanpa backend: hentikan FastAPI, buka
+`http://localhost:5173`, login, lalu pilih tanggal history. Firebase dan koneksi
+internet tetap diperlukan.
+
+Untuk full analysis, jalankan backend dan cek health publik:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/health |
   ConvertTo-Json -Depth 5
 ```
 
-Jalankan frontend React dari repository terpisah pada terminal kedua. Frontend
-harus memiliki konfigurasi berikut:
-
-```dotenv
-VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
-```
-
-Kemudian jalankan `npm install` dan `npm run dev`, lalu buka
-`http://localhost:5173`. Pertahankan kedua proses selama menggunakan aplikasi.
-Instruksi pembuatan, pengujian, dan struktur frontend ada di
-[`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md).
-
-Storage yang berhasil memakai Firebase akan menunjukkan nilai ekuivalen dengan:
+Storage yang benar menunjukkan nilai ekuivalen dengan:
 
 ```json
 {
@@ -234,117 +338,133 @@ Storage yang berhasil memakai Firebase akan menunjukkan nilai ekuivalen dengan:
 }
 ```
 
-Jika status masih `local` / `local-json`, jalankan pemeriksaan langsung berikut
-dari root repository. Pemeriksaan `list_runs` juga memaksa koneksi pertama agar
-error network, database, atau IAM tidak tersembunyi oleh lazy client:
+Sesudah login, frontend mengambil token Firebase untuk `GET /api/options` dan
+`POST /api/runs`. Backend tidak lagi menyediakan:
+
+```text
+/api/auth/config
+/api/auth/session
+/api/history
+/api/history/{run_id}
+GET /api/runs/{run_id}
+```
+
+Run document dan events dipantau langsung oleh listener Firestore frontend.
+Sesudah satu analisis, verifikasi `trading_runs/{run_id}` dan subcollection
+`events` pada Firebase Console.
+
+## Local JSON fallback
+
+Jika Firebase Admin tidak terkonfigurasi atau koneksi Firestore gagal, backend
+dapat beralih ke `local-json`. File tersebut berada di `WEB_LOCAL_DATA_DIR` atau
+`~/.tradingagents/web_history`.
+
+Browser tidak dapat membaca file lokal backend secara langsung. Akibatnya:
+
+- history local JSON tidak muncul pada frontend;
+- listener Firestore tidak dapat melihat progress run lokal;
+- tidak ada migrasi otomatis dari local JSON ke Firestore;
+- frontend harus menonaktifkan **Launch** ketika `/api/options` melaporkan
+  storage selain `firebase`.
+
+Perbaiki koneksi Firebase dan restart backend sebelum membuat analisis baru.
+Jangan menggabungkan archive local JSON dan Firestore secara diam-diam.
+
+## Keamanan dan biaya
+
+- Frontend boleh membaca hanya karena Firebase Auth + membership Rules. Semua
+  browser write tetap ditolak.
+- Backend Admin SDK melewati Rules dan dilindungi oleh IAM. Jangan menaruh
+  service-account key di frontend.
+- Backend tetap memverifikasi Firebase ID token pada options dan launch karena
+  kedua operasi dapat menghabiskan CPU, LLM quota, dan data-provider quota.
+- Gunakan HTTPS bila API diakses melalui jaringan. CORS bukan authorization.
+- Isi `WEB_AUTH_ALLOWED_EMAILS`. Tidak menyediakan tombol register tidak cukup
+  untuk mencegah pembuatan user melalui Firebase API.
+- Jangan aktifkan `WEB_ALLOW_CUSTOM_BACKEND_URLS=true` pada host bersama kecuali
+  seluruh user dan endpoint dipercaya.
+- Gunakan satu backend worker. Rekonsiliasi startup menganggap satu process
+  memiliki run aktif; untuk beberapa instance gunakan job ownership eksternal.
+- Firestore mengenakan biaya untuk document reads, writes, deletes, storage,
+  bandwidth, dan sebagian access calls pada Rules. Periksa
+  [Firestore pricing](https://firebase.google.com/docs/firestore/pricing).
+- Listener history harus dibatasi ke tanggal aktif dan events hanya dibaca untuk
+  run yang dipilih agar penggunaan read tidak tumbuh tanpa batas.
+
+## Troubleshooting
+
+### Health masih menunjukkan `local-json`
+
+Periksa secara berurutan:
+
+1. backend sudah direstart setelah `.env` berubah;
+2. `FIREBASE_ENABLED` bukan `false`;
+3. `Test-Path .\secrets\firebase-service-account.json` menghasilkan `True`;
+4. `firebase-admin` terpasang pada Conda environment yang menjalankan backend;
+5. Project ID di `.env`, JSON key, dan Firebase Console sama;
+6. database `(default)` sudah dibuat;
+7. IAM service account mengizinkan operasi Firestore;
+8. firewall atau proxy tidak memblokir Google APIs.
+
+Saat memeriksa `.env` melalui `python -`, berikan path eksplisit agar versi
+`python-dotenv` tertentu tidak menghasilkan `AssertionError`:
 
 ```powershell
 @'
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Beri path eksplisit karena script dijalankan melalui stdin (`python -`).
 load_dotenv(dotenv_path=Path.cwd() / ".env")
 
 from tradingagents.webapp.storage import build_run_store
 
 store = build_run_store()
-store.list_runs(None)
 print({"backend": store.backend_name, "configured": store.configured})
 '@ | python -
 ```
 
-Setelah membuat satu analisis dari frontend React, buka **Firestore Database >
-Data** di
-Firebase Console. Anda seharusnya melihat collection `trading_runs`, sebuah
-dokumen run, dan subcollection `events`. History tetap ditampilkan per hari di
-frontend berdasarkan `date_key`.
-
-## Keamanan dan biaya
-
-- Browser hanya berbicara dengan backend TradingAgents untuk data aplikasi dan
-  Firestore. Browser menerima Firebase **Web App config** (identifier publik)
-  untuk login, tetapi tidak pernah menerima service-account key, API key LLM,
-  atau akses Firestore langsung.
-- Frontend mengirim `Authorization: Bearer <Firebase ID token>` pada setiap
-  request options, run, polling, dan history. API memverifikasi token tersebut.
-  Tetap gunakan TLS dan rate limiting saat diekspos ke jaringan; login tidak
-  membatasi seberapa banyak kuota LLM yang dapat dipakai akun sah.
-- Izinkan hanya origin frontend yang diperlukan melalui `WEB_CORS_ORIGINS`.
-  Jangan gunakan wildcard, dan jangan menganggap CORS sebagai autentikasi.
-- Backend API menjalankan analisis secara serial dan membatasi antrean melalui
-  `WEB_RUN_QUEUE_LIMIT` (default `4`). Rekonsiliasi startup default mengasumsikan
-  hanya satu instance server. Jika beberapa instance sengaja memakai Firestore
-  yang sama, set `WEB_RECONCILE_STALE_RUNS=false` dan gunakan mekanisme ownership
-  atau job queue eksternal. Untuk deployment lokal yang didukung, gunakan
-  launcher `tradingagents-api` dengan satu worker; jangan menambahkan
-  `uvicorn --workers 2` atau lebih.
-- Secara default URL Ollama/OpenAI-compatible dari request harus sama dengan
-  endpoint yang telah dikonfigurasi server. Jangan aktifkan
-  `WEB_ALLOW_CUSTOM_BACKEND_URLS=true` pada deployment bersama kecuali semua
-  pengguna dan endpoint dipercaya. URL tersebut membuat server melakukan
-  koneksi keluar dan karena itu harus diperlakukan sebagai input sensitif
-  terhadap SSRF/jaringan internal.
-- Batasi siapa yang dapat membaca file key pada host. Untuk deployment Google
-  Cloud, gunakan Application Default Credentials/identity runtime alih-alih
-  menyalin key statis. Panduan inisialisasi untuk Google dan non-Google
-  environment tersedia di
-  [Admin SDK setup](https://firebase.google.com/docs/admin/setup#initialize_the_sdk).
-- Jika key pernah masuk Git, log, atau chat, anggap bocor: nonaktifkan/hapus key
-  tersebut di **Google Cloud Console > IAM & Admin > Service Accounts > Keys**,
-  lalu buat key baru dan perbarui `.env`.
-- Firestore mengenakan biaya berdasarkan document reads, writes, deletes,
-  storage, dan bandwidth. Firebase saat ini menyediakan kuota gratis untuk satu
-  database per project, tetapi batas dan harga dapat berubah. Periksa angka
-  terbaru dan buat budget alert melalui
-  [halaman billing Firestore resmi](https://firebase.google.com/docs/firestore/pricing#free-quota).
-- Setiap event agent adalah satu dokumen/write. History yang panjang akan
-  meningkatkan penggunaan storage dan reads, jadi hapus/arsipkan data lama
-  sesuai kebijakan Anda.
-
-## Troubleshooting
-
-### `backend` tetap `local-json`
-
-Periksa berurutan:
-
-1. server sudah direstart setelah `.env` diubah;
-2. `FIREBASE_ENABLED` bukan `false`;
-3. path key benar dan `Test-Path` menghasilkan `True`;
-4. `firebase-admin` terpasang pada environment Python yang menjalankan server;
-5. `FIREBASE_PROJECT_ID` sama persis dengan `project_id` di JSON;
-6. database Firestore `(default)` sudah benar-benar dibuat;
-7. koneksi jaringan ke Google APIs tidak diblokir proxy/firewall.
-
-Lihat warning pada terminal backend API. Storage sengaja beralih ke JSON lokal
-ketika inisialisasi atau operasi Firestore gagal agar frontend tidak berhenti.
-
 ### `ModuleNotFoundError: firebase_admin`
-
-Pastikan instalasi dilakukan di environment aktif:
 
 ```powershell
 conda activate tradingagents
-python -m pip install firebase-admin
+python -m pip install -e ".[api]"
 python -c "import firebase_admin; print(firebase_admin.__version__)"
 ```
 
-### `PermissionDenied` / `403`
+### Backend `PermissionDenied` / `403` dari Firestore
 
-Pastikan service account berasal dari project yang sama dan key masih aktif.
-Admin SDK memakai IAM, bukan browser Security Rules. Penjelasan resmi tentang
-pemisahan rules client dan IAM server ada di
+Pastikan service account berasal dari project yang sama, key masih aktif, dan
+IAM role-nya benar. Admin SDK memakai IAM, bukan browser Security Rules. Lihat
 [Secure data in Cloud Firestore](https://firebase.google.com/docs/firestore/security/overview).
 
-### `NotFound` / database tidak ada
+### Login berhasil tetapi history mendapat `permission-denied`
 
-Buat Firestore database pada project yang tercantum di `.env`. Jika memakai
-database bernama selain default, isi `FIREBASE_DATABASE_ID` dengan ID persisnya
-dan deploy rules secara khusus untuk database tersebut.
+Periksa bahwa:
 
-### Data baru tidak terlihat di Firebase Console
+1. rules read-only membership sudah di-deploy ke project yang benar;
+2. document `tradingagents_members/{UID}` memakai UID, bukan email;
+3. UID berasal dari Firebase project yang sama;
+4. `VITE_FIREBASE_PROJECT_ID`, backend `FIREBASE_PROJECT_ID`, dan service-account
+   `project_id` identik; database frontend/backend sama-sama `(default)`;
+5. listener juga diizinkan pada subcollection `events`.
 
-Cek `/api/health`. Jika backend telah failover ke `local-json`, data run tersebut
-ada di `WEB_LOCAL_DATA_DIR` atau `~/.tradingagents/web_history`, bukan di
-Firestore. Perbaiki koneksi lalu restart server; failover mencegah kehilangan
-run lokal, tetapi tidak melakukan migrasi otomatis terhadap history lama.
+### History kosong setelah run baru
+
+Cek `/api/health` dan status storage saat launch. Jika backend failover ke
+`local-json`, run tersebut hanya ada di mesin backend dan tidak dapat diambil
+langsung oleh frontend. Jika storage tetap Firestore, cek `date_key`, project,
+database ID, listener error, dan Firebase Console.
+
+### Rules deploy ke project yang salah
+
+Jalankan dari repository frontend:
+
+```powershell
+npx firebase projects:list
+npx firebase use
+npx firebase deploy --only firestore:rules,firestore:indexes `
+  --project project-id-anda
+```
+
+Selalu cocokkan Project ID CLI dengan `VITE_FIREBASE_PROJECT_ID` sebelum
+menyetujui deployment.

@@ -180,19 +180,27 @@ pip install -e ".[api]"
 tradingagents-api
 ```
 
-The API listens on `http://127.0.0.1:8000`. Its health endpoint is
-`/api/health`, interactive API documentation is available at `/api/docs`, and
-the protected application contract remains under `/api/*`. The previous
-`.[web]` extra and `tradingagents-web` command remain as compatibility aliases,
-but they launch the same API-only process.
+The API listens on `http://127.0.0.1:8000`. Root metadata, `/api/health`,
+`/api/docs`, and `/api/openapi.json` are public. The only browser-facing
+protected operations are `GET /api/options` and `POST /api/runs`; both require
+a verified Firebase ID token. Authentication bootstrap, session endpoints,
+history endpoints, run-detail reads, and frontend assets are intentionally
+not served by FastAPI. The previous `.[web]` extra and `tradingagents-web`
+command remain as compatibility aliases, but they launch the same API-only
+process.
 
 Create the React + Vite + TypeScript application in a separate repository by
 using the complete, copy-paste implementation specification in
 [`docs/REACT_FRONTEND_PROMPT.md`](docs/REACT_FRONTEND_PROMPT.md). It captures the
 original Bloomberg-terminal layout, Firebase login, dynamic provider controls,
-polling, daily history, Markdown reports/decision formatting, text-size slider,
-responsive behavior, accessibility, and security requirements. The suggested
-local frontend URL is `http://localhost:5173`.
+Firestore listeners for active and archived runs, daily history, Markdown
+reports/decision formatting, text-size slider, responsive behavior,
+accessibility, and security requirements. For an existing frontend created
+from an older backend-mediated specification, apply the migration prompt in
+[`docs/REACT_FRONTEND_DIRECT_FIREBASE_PROMPT.md`](docs/REACT_FRONTEND_DIRECT_FIREBASE_PROMPT.md).
+Direct Firebase login and read-only Firestore history are the only supported
+frontend architecture. They continue working while the Python API is stopped;
+new analyses still require this API and the configured Gemini or Ollama runtime.
 
 The API permits only exact frontend origins. The two local Vite origins are
 allowed by default; override them without using a wildcard when necessary:
@@ -201,11 +209,16 @@ allowed by default; override them without using a wildcard when necessary:
 WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
-Firebase Authentication is required by default. The standalone frontend obtains
-the public Web config from `/api/auth/config`, authenticates with Google or an
-existing email/password account, and sends a Firebase ID token as a Bearer token
-to protected endpoints. It never connects to Firestore directly. Follow
-[`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md) and
+The standalone frontend initializes the Firebase Web SDK from its own public
+`VITE_FIREBASE_*` configuration, authenticates with Google or an existing
+email/password account, and reads approved history directly from Firestore.
+Firestore Security Rules are owned and deployed from the frontend repository;
+they grant read-only access to explicitly approved membership UIDs and deny all
+client writes. The frontend sends a fresh Firebase ID token only when it calls
+the protected analysis endpoints. FastAPI verifies that token and the optional
+`WEB_AUTH_ALLOWED_EMAILS` allowlist before exposing options or spending an
+LLM/data-provider quota; its Firebase Admin SDK writes every run and event to
+Firestore for the frontend listeners. Follow
 [`docs/FIREBASE_SETUP.md`](docs/FIREBASE_SETUP.md); keep every LLM key and the
 Firebase service-account credential in the backend `.env`/`secrets` only.
 
@@ -222,7 +235,8 @@ multiple instances intentionally share one Firestore database, set
 Do not expose raw Uvicorn publicly without TLS, rate limiting, and an explicit
 CORS allowlist. Authentication does not prevent an allowed user from consuming
 configured LLM/data quotas, and the current shared history is not partitioned
-per Firebase user.
+per Firebase user: every UID admitted by the frontend-owned membership rules can
+read the same run collection.
 
 ### Markets and tickers
 

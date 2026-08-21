@@ -1,6 +1,6 @@
 """Persistence adapters for TradingAgents web runs.
 
-The web application prefers Cloud Firestore when server-side credentials are
+The backend API prefers Cloud Firestore when server-side credentials are
 configured.  A small JSON store is always available as a zero-configuration
 fallback, which keeps the UI usable for local development.
 
@@ -401,11 +401,12 @@ class FirestoreRunStore:
         try:
             reference = self._client.collection(self._collection_name).document(run_id)
             reference.set(changes, merge=True)
-            snapshot = reference.get()
-            payload = dict(_json_safe(snapshot.to_dict() or changes))
-            payload["run_id"] = run_id
             self._mirror("update_run", run_id, changes)
-            return payload
+            # RunManager does not need a second remote read after every merge.
+            # Returning the accepted delta preserves the mapping contract while
+            # avoiding extra Firestore billing, latency, and a false fallback
+            # when a write succeeds but the follow-up read is interrupted.
+            return {"run_id": run_id, **changes}
         except Exception as exc:
             self._disable("update_run", exc)
             return self._local.update_run(run_id, changes)

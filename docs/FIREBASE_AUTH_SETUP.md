@@ -1,52 +1,75 @@
 # Setup Firebase Authentication untuk TradingAgents
 
-TradingAgents menyediakan **login saja**, tanpa tombol atau endpoint register.
-Metode yang tersedia adalah Google dan email/password. Aplikasi React berjalan
-sebagai frontend terpisah, sedangkan FastAPI hanya melayani backend API. Sesudah
-login, frontend mengirim Firebase ID token sebagai `Authorization: Bearer
-<token>` pada setiap request API yang dilindungi; Python Firebase Admin SDK
-memverifikasi token tersebut sebelum mengizinkan akses konfigurasi analisis,
-run, respons agent, dan history.
+TradingAgents menyediakan halaman **login saja** pada frontend React. Metode
+login yang didukung adalah Google dan email/password; tidak ada tombol, route,
+atau API register di aplikasi.
 
-Firestore tetap server-only. File `firebase/firestore.rules` menolak seluruh
-akses langsung dari browser; autentikasi tidak pernah memberikan Firebase Web
-SDK akses langsung ke collection `trading_runs`.
+Authentication dan pembacaan history dilakukan langsung oleh frontend melalui
+Firebase Web SDK. FastAPI tidak diperlukan untuk login, logout, mempertahankan
+session Firebase, atau melihat Firestore history. Backend hanya diperlukan saat
+user ingin mengambil options runtime dan memulai analisis baru.
+
+Backend tetap memverifikasi Firebase ID token pada dua endpoint yang dapat
+memakai resource server:
+
+```text
+GET  /api/options
+POST /api/runs
+```
+
+Frontend mengirim `Authorization: Bearer <Firebase ID token>` hanya pada request
+tersebut. Ini merupakan authorization untuk CPU, LLM, dan data-provider quota,
+bukan implementasi halaman login atau session backend.
+
+Endpoint berikut sudah tidak tersedia:
+
+```text
+/api/auth/config
+/api/auth/session
+/api/history
+/api/history/{run_id}
+GET /api/runs/{run_id}
+```
+
+History dan live run dibaca menggunakan listener Firestore pada frontend.
 
 ## Prasyarat
 
-Selesaikan [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md) terlebih dahulu sampai Anda
-memiliki:
+Selesaikan [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md) sampai Anda memiliki:
 
-- project Firebase dan database Firestore;
-- `secrets/firebase-service-account.json`;
-- `FIREBASE_PROJECT_ID` dan `FIREBASE_CREDENTIALS_PATH` di `.env`;
-- dependency `firebase-admin` melalui `pip install -e ".[api]"`.
+- project Firebase dan Firestore database `(default)`;
+- service-account backend yang tersimpan aman;
+- `FIREBASE_PROJECT_ID`, `FIREBASE_CREDENTIALS_PATH`, dan konfigurasi storage
+  lain di `.env` backend;
+- repository React terpisah yang dibuat dari
+  [`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md).
+
+Repository frontend adalah satu-satunya pemilik `firebase.json`,
+`firestore.rules`, dan `firestore.indexes.json`. Repository Python tidak
+menyediakan file deployment Firebase tersebut.
 
 ## 1. Daftarkan Firebase Web App
 
 1. Buka [Firebase Console](https://console.firebase.google.com/) dan pilih
-   project yang sama dengan service account.
-2. Buka ikon roda gigi **Project settings > General**.
+   project yang sama dengan service account backend.
+2. Buka **Project settings > General**.
 3. Pada **Your apps**, klik ikon Web `</>` atau **Add app > Web**.
-4. Isi nickname, misalnya `TradingAgents React`. Firebase Hosting tidak wajib
-   dicentang. Frontend React dijalankan atau di-host sebagai aplikasi terpisah;
-   backend FastAPI tidak menyajikan Bloomberg UI.
+4. Isi nickname, misalnya `TradingAgents React`. Firebase Hosting tidak wajib.
 5. Klik **Register app**.
-6. Firebase menampilkan objek `firebaseConfig`. Salin nilainya apa adanya;
-   jangan menyalin baris JavaScript ke `.env`.
+6. Firebase menampilkan object `firebaseConfig`. Simpan nilai field-nya untuk
+   `.env.local` frontend.
 
-Firebase menjelaskan proses registrasi dan config object pada
+Panduan resminya tersedia di
 [Add Firebase to your JavaScript project](https://firebase.google.com/docs/web/setup).
-Firebase Web App config berisi identifier project, bukan service-account private
-key; lihat [penjelasan config object resmi](https://firebase.google.com/docs/web/learn-more#config-object).
+Web App config berisi identifier publik dan bukan service-account private key;
+lihat [Firebase config object](https://firebase.google.com/docs/web/learn-more#config-object).
 
 ## 2. Aktifkan metode login
 
-1. Di Firebase Console, buka **Build/Security > Authentication** lalu klik
-   **Get started** jika diminta.
+1. Buka **Build > Authentication** dan klik **Get started** bila diminta.
 2. Buka tab **Sign-in method**.
-3. Pilih **Email/Password**, aktifkan opsi **Email/Password**, lalu **Save**.
-   Jangan aktifkan Email link bila tidak diperlukan.
+3. Pilih **Email/Password**, aktifkan **Email/Password**, lalu **Save**. Email
+   link tidak diperlukan.
 4. Pilih **Google**, aktifkan provider, pilih **Project support email**, lalu
    **Save**.
 
@@ -55,123 +78,250 @@ Referensi resmi:
 - [Email/password sign-in](https://firebase.google.com/docs/auth/web/password-auth)
 - [Google sign-in](https://firebase.google.com/docs/auth/web/google-signin)
 
-## 3. Tambahkan domain aplikasi
+Frontend hanya menggunakan `signInWithEmailAndPassword` dan
+`signInWithPopup`. Jangan menambahkan `createUserWithEmailAndPassword`, login
+anonymous, atau halaman sign-up.
+
+## 3. Tambahkan Authorized Domains
 
 1. Buka **Authentication > Settings > Authorized domains**.
-2. Untuk development lokal, tambahkan `localhost` bila belum ada. Project yang
+2. Tambahkan `localhost` untuk development lokal bila belum ada. Project yang
    dibuat setelah 28 April 2025 tidak selalu menambahkannya otomatis.
-3. Jika frontend dibuka dari host LAN atau domain produksi, tambahkan hostname
-   **frontend** tanpa scheme, port, atau path, misalnya `trading.example.com`.
-   Hostname backend API bukan Authorized Domain kecuali halaman login memang
-   dijalankan dari hostname yang sama.
-4. Jangan menambahkan domain yang tidak Anda kontrol. Hapus `localhost` dari
-   project produksi bila tidak diperlukan.
+3. Jika frontend menggunakan domain lain, tambahkan hostname frontend tanpa
+   scheme, port, atau path, misalnya `trading.example.com`.
+4. Jangan menambahkan domain yang tidak Anda kontrol.
 
-Port tidak ditulis pada daftar domain. Untuk setup lokal yang didukung, buka
-frontend di `http://localhost:5173` dan tambahkan `localhost`; backend tetap
-berjalan di `http://127.0.0.1:8000`. Jika Firebase menampilkan error domain,
-tambahkan hostname frontend yang benar-benar tercantum pada error. Lihat
-[Firebase Authentication FAQ tentang authorized domains](https://firebase.google.com/support/faq#auth-allowed-domains).
+Untuk setup lokal, buka UI melalui `http://localhost:5173`. Daftar Authorized
+Domains berisi `localhost`, bukan `http://localhost:5173`. Host backend
+`127.0.0.1` tidak perlu ditambahkan kecuali halaman login benar-benar disajikan
+dari sana. Lihat
+[Firebase Authentication FAQ](https://firebase.google.com/support/faq#auth-allowed-domains).
 
-## 4. Isi Web App config di `.env`
+## 4. Isi `.env.local` frontend
 
-Edit `.env` (bukan `.env.example`) dan petakan nilai dari `firebaseConfig`:
+Di repository React, copy `.env.example` menjadi `.env.local`, lalu isi public
+Web App config:
 
 ```dotenv
-WEB_AUTH_REQUIRED=true
+VITE_FIREBASE_API_KEY=nilai-firebaseConfig-apiKey
+VITE_FIREBASE_AUTH_DOMAIN=project-id-anda.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=project-id-anda
+VITE_FIREBASE_APP_ID=nilai-firebaseConfig-appId
+VITE_FIREBASE_DATABASE_ID=(default)
 
-# Origin frontend React yang boleh memanggil backend API. Origin harus persis.
-WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+# Opsional, isi jika field tersedia pada firebaseConfig.
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MEASUREMENT_ID=
 
-# firebaseConfig.apiKey
-FIREBASE_WEB_API_KEY=AIza...
-# firebaseConfig.authDomain
-FIREBASE_AUTH_DOMAIN=project-id-anda.firebaseapp.com
-# firebaseConfig.projectId (harus sama dengan service account)
-FIREBASE_PROJECT_ID=project-id-anda
-# firebaseConfig.appId
-FIREBASE_WEB_APP_ID=1:123456789:web:abcdef123456
-
-# Opsional, salin hanya bila ada pada firebaseConfig
-FIREBASE_MESSAGING_SENDER_ID=123456789
-FIREBASE_STORAGE_BUCKET=project-id-anda.firebasestorage.app
-FIREBASE_MEASUREMENT_ID=G-XXXXXXXXXX
-
-# Sangat disarankan: akun yang diizinkan backend, dipisahkan koma.
-WEB_AUTH_ALLOWED_EMAILS=anda@gmail.com,analyst@perusahaan.com
+# Hanya diperlukan untuk options dan membuat analisis baru.
+VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
 ```
 
-Empat nilai wajib adalah `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN`,
-`FIREBASE_PROJECT_ID`, dan `FIREBASE_WEB_APP_ID`. Web API key memang dikirim ke
-browser oleh Firebase dan bukan pengganti rules atau autentikasi. Jangan pernah
-memasukkan isi service-account JSON ke variabel `FIREBASE_WEB_*`.
+Setelah mengubah `.env.local`, restart Vite. Jangan menaruh public config ini di
+`.env` backend dan jangan mengharapkan `/api/auth/config`, karena endpoint
+tersebut telah dihapus.
 
-`WEB_CORS_ORIGINS` adalah daftar origin HTTP(S) yang dipisahkan koma, termasuk
-scheme dan port tetapi tanpa path. Jangan gunakan wildcard `*`, credentials,
-query, atau fragment. Trailing slash akan dinormalisasi; format canonical tanpa
-slash tetap disarankan. CORS diperiksa secara exact-match setelah normalisasi dan
-tidak menggantikan verifikasi Bearer token. Jika frontend production berada di
-`https://trading.example.com`, gunakan origin tersebut alih-alih origin Vite
-lokal, atau cantumkan keduanya bila keduanya memang perlu diizinkan.
+Yang tidak boleh berada di frontend atau memiliki prefix `VITE_`:
 
-`WEB_AUTH_ALLOWED_EMAILS` bersifat case-insensitive. Jika kosong, setiap user
-valid di Firebase project dapat memakai backend. Ini terutama penting untuk
-Google: login federasi pertama dapat membuat record user Firebase secara
-otomatis walaupun frontend tidak memiliki tombol register.
+- service-account JSON atau private key;
+- `FIREBASE_CREDENTIALS_PATH`;
+- API key Gemini atau provider data;
+- raw Firebase ID token yang disalin manual.
 
-## 5. Buat user email/password tanpa halaman register
+Firebase SDK mengelola token dan auth state. Frontend menggunakan
+`browserLocalPersistence`, sehingga session bertahan setelah reload. Pada laptop
+bersama, selalu logout setelah selesai. Jangan menyimpan protected history atau
+raw token sendiri di localStorage.
+
+## 5. Buat user tanpa halaman register
+
+### Email/password
 
 1. Buka **Authentication > Users**.
 2. Klik **Add user**.
 3. Isi email dan password awal, lalu simpan.
-4. Tambahkan email yang sama ke `WEB_AUTH_ALLOWED_EMAILS`.
-5. Bagikan credential melalui kanal aman; jangan menyimpannya di repository.
+4. Tambahkan email yang sama ke `WEB_AUTH_ALLOWED_EMAILS` backend.
+5. Buat membership UID seperti pada langkah berikut.
+6. Bagikan credential melalui kanal aman, bukan Git atau chat publik.
 
-Firebase Console memang mendukung pembuatan password user melalui **Add user**;
-lihat [Manage Users](https://firebase.google.com/docs/auth/web/manage-users#create_a_user).
-Frontend React hanya memanggil `signInWithEmailAndPassword` dan tidak memanggil
-API pembuatan user.
+Firebase Console mendukung pembuatan user administratif; lihat
+[Manage Users](https://firebase.google.com/docs/auth/web/manage-users#create_a_user).
 
-Untuk user Google, cukup masukkan alamat Google yang disetujui ke
-`WEB_AUTH_ALLOWED_EMAILS`. User memilih tombol **Continue with Google** pada
-halaman login frontend.
+### Google
 
-## 6. Jalankan backend dan frontend
+1. Tambahkan email Google yang disetujui ke `WEB_AUTH_ALLOWED_EMAILS` backend.
+2. Minta user menekan **Continue with Google** satu kali.
+3. Setelah record user muncul pada **Authentication > Users**, copy UID dan
+   buat membership.
 
-Restart backend agar `.env` dibaca ulang. Jalankan dari terminal repository
-TradingAgents:
+Tidak adanya tombol register bukan security boundary. Jika
+`WEB_AUTH_ALLOWED_EMAILS` kosong, setiap user valid pada Firebase project dapat
+memanggil endpoint analisis yang terlindungi. Gunakan allowlist untuk backend
+privat.
+
+## 6. Buat membership UID untuk akses history
+
+Firebase Authentication dan Firestore membership adalah dua gate terpisah:
+
+- Authentication membuktikan identitas user.
+- `tradingagents_members/{UID}` mengizinkan shared history read.
+- `WEB_AUTH_ALLOWED_EMAILS` mengizinkan options dan launch pada backend.
+
+Langkah menambahkan member:
+
+1. Buka **Authentication > Users**.
+2. Copy **User UID** secara persis. Jangan menggunakan email sebagai document
+   ID.
+3. Buka **Firestore Database > Data**.
+4. Buat collection `tradingagents_members` bila belum ada.
+5. Buat document baru dengan Document ID sama persis dengan UID.
+6. Tambahkan metadata administratif opsional seperti:
+
+   ```text
+   email: "anda@gmail.com"
+   added_at: "2026-08-21"
+   ```
+
+7. Refresh frontend dan login kembali bila perlu.
+
+Rules hanya memeriksa keberadaan document. Browser tidak perlu dan tidak boleh
+membaca document membership itu sendiri. Frontend menguji izin dengan query
+minimal ke `trading_runs`; query yang berhasil tetapi kosong berarti akses sah
+dan belum ada history.
+
+Untuk mencabut akses:
+
+1. hapus `tradingagents_members/{UID}` agar history langsung ditolak;
+2. hapus email dari `WEB_AUTH_ALLOWED_EMAILS` dan restart backend agar launch
+   ditolak;
+3. disable atau delete user di Authentication bila seluruh login harus dicabut.
+
+## 7. Buat, uji, dan deploy read-only Rules
+
+Di repository frontend, `firestore.rules` harus berisi:
+
+```javascript
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function canReadTradingHistory() {
+      return request.auth != null
+        && exists(
+          /databases/$(database)/documents/tradingagents_members/$(request.auth.uid)
+        );
+    }
+
+    match /tradingagents_members/{memberUid} {
+      allow read, write: if false;
+    }
+
+    match /trading_runs/{runId} {
+      allow get, list: if canReadTradingHistory();
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow get, list: if canReadTradingHistory();
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+```
+
+Jangan menggantinya dengan `request.auth != null`. Semua approved member akan
+membaca history bersama karena run saat ini belum memiliki `owner_uid`.
+
+Prompt frontend juga menghasilkan test Rules Emulator. Jalankan dan deploy dari
+repository frontend, bukan backend:
 
 ```powershell
+npm install
+npx firebase login
+npx firebase use --add
+npm run test:rules
+npx firebase deploy --only firestore:rules,firestore:indexes `
+  --project project-id-anda
+```
+
+Sebelum deploy, pastikan `project-id-anda`, `VITE_FIREBASE_PROJECT_ID`, backend
+`FIREBASE_PROJECT_ID`, dan field `project_id` di service-account JSON semuanya
+identik. Pastikan database frontend/backend sama-sama `(default)`. Repository
+frontend merupakan satu-satunya sumber kebenaran rules dan indexes.
+
+## 8. Konfigurasikan authorization backend
+
+Public Web App config tidak diperlukan backend. `.env` Python hanya memerlukan
+Admin credentials, CORS, dan policy API:
+
+```dotenv
+FIREBASE_ENABLED=true
+FIREBASE_PROJECT_ID=project-id-anda
+FIREBASE_CREDENTIALS_PATH=secrets/firebase-service-account.json
+FIREBASE_DATABASE_ID=(default)
+FIREBASE_COLLECTION=trading_runs
+
+WEB_AUTH_REQUIRED=true
+WEB_AUTH_ALLOWED_EMAILS=anda@gmail.com,analyst@perusahaan.com
+WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+`WEB_AUTH_ALLOWED_EMAILS` bersifat case-insensitive. Membership UID dan email
+allowlist sengaja terpisah: user dapat diberi akses history tanpa izin memakai
+quota analisis, atau sebaliknya. Untuk pengalaman normal, tambahkan user pada
+keduanya.
+
+Backend memakai service account yang sama untuk menulis Firestore dan
+memverifikasi ID token. Lihat
+[Verify Firebase ID tokens](https://firebase.google.com/docs/auth/admin/verify-id-tokens).
+
+`WEB_AUTH_REQUIRED=false` hanya untuk development lokal darurat. Jangan gunakan
+nilai tersebut ketika API tersedia melalui LAN, reverse proxy, tunnel, atau
+internet.
+
+## 9. Jalankan dua mode aplikasi
+
+### Login dan history saja
+
+FastAPI boleh berhenti. Jalankan hanya frontend:
+
+```powershell
+cd W:\path\ke\repository-frontend
+npm install
+npm run dev
+```
+
+Buka `http://localhost:5173`. Hasil yang benar:
+
+1. login page tampil tanpa halaman register;
+2. Google dan user email/password Console dapat login;
+3. non-member melihat `FIRESTORE ACCESS DENIED`, bukan metadata history;
+4. member dapat membuka Daily History, reports, events, dan final decision;
+5. backend offline menghasilkan mode `HISTORY ONLY`, bukan logout.
+
+Firebase Authentication, Firestore, dan internet masih harus tersedia.
+
+### Full analysis
+
+Jalankan backend pada terminal lain:
+
+```powershell
+cd W:\AI\Agent\TradingAgents
 conda activate tradingagents
 python -m pip install -e ".[api]"
 tradingagents-api
 ```
 
-Backend API tersedia di `http://127.0.0.1:8000`; root URL menampilkan metadata
-API, bukan Bloomberg UI. Buat frontend React + Vite di repository terpisah
-dengan panduan lengkap [`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md).
-Pada frontend tersebut, arahkan API dan jalankan Vite:
+Frontend mengambil fresh ID token untuk `/api/options` dan `POST /api/runs`.
+Backend harus melaporkan storage `firebase`; bila storage `local-json`, Launch
+harus tetap disabled karena frontend tidak dapat membaca hasilnya.
 
-```dotenv
-VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
-```
-
-```powershell
-npm install
-npm run dev
-```
-
-Buka `http://localhost:5173`. Kedua proses harus tetap berjalan. Hasil yang
-benar:
-
-1. halaman login frontend tampil; workspace tidak terlihat;
-2. email/password yang dibuat di Console dapat login;
-3. tombol Google membuka pemilih akun;
-4. akun di luar allowlist mendapat pesan ditolak;
-5. sesudah login, workspace dan history tampil;
-6. tombol **LOGOUT** kembali ke halaman login frontend.
-
-Pemeriksaan API tanpa token harus menghasilkan `401`:
+Request options tanpa token harus menghasilkan `401`:
 
 ```powershell
 try {
@@ -181,83 +331,95 @@ try {
 }
 ```
 
-Endpoint bootstrap berikut memang publik agar halaman login frontend dapat
-dimulai:
+Root API, `/api/health`, OpenAPI docs, dan CORS preflight tetap publik. Options
+dan POST run memerlukan Bearer token. Frontend tidak boleh meminta user menyalin
+token secara manual atau menulis token ke log.
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/api/auth/config |
-  ConvertTo-Json -Depth 5
-```
+## Keamanan
 
-Pastikan `configured` bernilai `true`. Output ini berisi Web App config publik,
-bukan service-account key. Root API, `/api/health`, `/api/auth/config`,
-dokumentasi OpenAPI, dan preflight CORS bersifat publik. `/api/auth/session`,
-options, run, polling, serta history wajib menerima Firebase ID token melalui
-header Bearer. FastAPI tidak lagi menyajikan file HTML/CSS/JS frontend.
-
-## 7. Keamanan deployment
-
-- Gunakan HTTPS pada deployment jaringan/production agar ID token dan session
-  tidak melintasi jaringan dalam plaintext.
-- Batasi `WEB_CORS_ORIGINS` ke origin frontend yang benar-benar dipercaya.
-  Jangan gunakan `*`; CORS bukan autentikasi dan setiap endpoint yang dilindungi
-  tetap wajib memverifikasi Bearer token.
-- Pertahankan `firebase/firestore.rules` dalam mode deny-all. Backend Admin SDK
-  melewati rules melalui IAM; browser tidak membutuhkan Firestore SDK.
-- Isi `WEB_AUTH_ALLOWED_EMAILS` untuk server privat. Menonaktifkan user di
-  Firebase Console dan menghapusnya dari allowlist sama-sama disarankan ketika
-  akses dicabut.
-- Batasi Web API key sesuai panduan
+- Gunakan HTTPS bila frontend atau backend diakses melalui jaringan. ID token
+  tidak boleh melintasi jaringan dalam plaintext.
+- Batasi `WEB_CORS_ORIGINS` secara exact-match. CORS bukan authorization.
+- Browser hanya memiliki read access untuk member. Semua write dilakukan Admin
+  SDK backend dan dikendalikan IAM.
+- Batasi Firebase Web API key sesuai
   [Firebase API keys](https://firebase.google.com/docs/projects/api-keys), tetapi
-  jangan menganggap API key sebagai credential user.
-- `WEB_AUTH_REQUIRED=false` hanya disediakan untuk development lokal darurat.
-  Jangan gunakan nilai tersebut pada host bersama atau production.
-- Terapkan rate limiting pada reverse proxy. User yang sah tetap dapat
-  menghabiskan kuota data vendor atau LLM.
-- Frontend React memakai Firebase JavaScript SDK untuk Authentication saja.
-  Firewall atau Content Security Policy harus mengizinkan endpoint Firebase
-  Authentication yang diperlukan. Service-account JSON hanya berada pada host
-  backend dan tidak boleh disalin ke repository, build, atau environment
-  frontend.
-
-Firebase merekomendasikan mengirim ID token client melalui HTTPS dan
-memverifikasinya dengan Admin SDK pada custom backend; lihat
-[Verify Firebase ID tokens](https://firebase.google.com/docs/auth/admin/verify-id-tokens).
+  jangan memperlakukannya sebagai password user.
+- Jangan menambahkan frontend write untuk runs, events, atau membership.
+- Hentikan listener Firestore sebelum logout dan bersihkan data protected dari
+  React state.
+- Persistent Firestore IndexedDB cache tidak diaktifkan secara default karena
+  history dapat sensitif pada perangkat bersama. Auth persistence tidak sama
+  dengan menyimpan isi history secara offline.
+- User yang sah tetap dapat menghabiskan quota. Pertahankan queue limit dan
+  tambahkan rate limiting bila backend diekspos di luar laptop pribadi.
+- App Check dapat ditambahkan sebagai defense in depth, tetapi bukan pengganti
+  Authentication, Rules, atau backend authorization.
 
 ## Troubleshooting
 
-### `SETUP REQUIRED`
+### `SETUP REQUIRED` sebelum login
 
-Cek `/api/auth/config` dan isi seluruh nama environment yang tercantum pada
-field `missing`. Restart server sesudah mengubah `.env`.
+Periksa seluruh `VITE_FIREBASE_*` pada `.env.local` frontend. Pastikan tidak ada
+tanda kutip yang salah, Project ID sama, lalu restart `npm run dev`. Backend
+tidak menyediakan `/api/auth/config` untuk mengisi nilai tersebut.
 
 ### `auth/unauthorized-domain`
 
-Tambahkan hostname aplikasi ke **Authentication > Settings > Authorized
-domains**. Gunakan hostname frontend, bukan URL backend. Untuk Vite lokal,
-tambahkan `localhost` secara manual dan buka `http://localhost:5173`.
+Tambahkan hostname frontend pada **Authentication > Settings > Authorized
+domains**. Untuk Vite lokal, tambahkan `localhost` lalu buka
+`http://localhost:5173`.
 
-### Login Google popup tidak muncul
+### Popup Google tidak muncul
 
-Izinkan popup untuk origin frontend, pastikan provider Google sudah enabled,
-dan periksa bahwa browser/firewall dapat menjangkau Firebase Authentication.
-
-### Browser menampilkan error CORS
-
-Pastikan origin yang terlihat di address bar frontend tercantum persis pada
-`WEB_CORS_ORIGINS`. `http://localhost:5173` dan
-`http://127.0.0.1:5173` adalah dua origin berbeda. Jangan memperbaikinya dengan
-wildcard; ubah daftar origin lalu restart `tradingagents-api`.
+Pastikan provider Google enabled, izinkan popup pada browser, gunakan authorized
+domain yang benar, dan cek firewall dapat menjangkau Firebase Authentication.
 
 ### Email/password selalu ditolak
 
-Pastikan provider Email/Password enabled, user sudah dibuat pada tab **Users**,
-password benar, user tidak disabled, dan email ada di allowlist bila allowlist
-diaktifkan.
+Pastikan provider enabled, user dibuat di **Authentication > Users**, password
+benar, dan user tidak disabled. Email allowlist backend tidak memengaruhi proses
+login frontend; allowlist baru diperiksa saat options atau launch.
 
-### Login Firebase berhasil tetapi server menolak sesi
+### Login berhasil tetapi `FIRESTORE ACCESS DENIED`
 
-Pastikan Web App, `FIREBASE_PROJECT_ID`, dan service-account JSON berasal dari
-project yang sama. Cek juga `FIREBASE_CREDENTIALS_PATH`, dependency
-`firebase-admin`, jam sistem server, serta akses jaringan server ke public keys
-Google yang dipakai untuk verifikasi token.
+Periksa:
+
+1. rules membership telah di-deploy ke project yang benar;
+2. document ID `tradingagents_members/{UID}` berisi UID persis, bukan email;
+3. frontend memakai project dan database ID yang sama;
+4. user tidak berpindah akun Google;
+5. rule `events` juga ada secara eksplisit.
+
+Tidak adanya run bukan error: query sah pada collection kosong tetap berhasil.
+
+### Login dan history berhasil tetapi Launch mendapat `401`
+
+Frontend harus mengambil ID token Firebase terbaru dan mengirim header Bearer
+ke `/api/options` serta `POST /api/runs`. Pastikan request bukan memakai cached
+token string buatan sendiri dan jam sistem laptop benar.
+
+### Launch mendapat `403`
+
+Tambahkan email login ke `WEB_AUTH_ALLOWED_EMAILS`, pastikan ejaannya benar,
+lalu restart backend. Membership Firestore tidak otomatis memberi izin launch.
+
+### Launch mendapat `503` authorization configuration error
+
+Pastikan `FIREBASE_CREDENTIALS_PATH`, `FIREBASE_PROJECT_ID`, service-account
+JSON, dependency `firebase-admin`, jam sistem, dan jaringan ke public keys Google
+benar. Web App, service account, dan Firestore harus berasal dari project yang
+sama.
+
+### Backend offline menyebabkan logout
+
+Itu adalah bug frontend. Auth state dan history tidak boleh bergantung pada
+`/api/health`, `/api/options`, atau endpoint FastAPI lainnya. Saat backend tidak
+tersedia, pertahankan user Firebase dan history lalu tampilkan `HISTORY ONLY`.
+
+### History tidak menampilkan run dari local JSON
+
+Ini memang batas arsitektur. Browser hanya membaca Cloud Firestore. Data di
+`WEB_LOCAL_DATA_DIR` atau `~/.tradingagents/web_history` tidak tersedia tanpa
+API pembaca, dan endpoint history backend sudah dihapus. Perbaiki Firestore,
+restart backend, dan pastikan storage `firebase` sebelum launch berikutnya.

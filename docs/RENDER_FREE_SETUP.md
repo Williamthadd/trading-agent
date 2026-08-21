@@ -6,8 +6,9 @@ terpisah:
 ```text
 Browser
   -> frontend React static (hostname frontend)
-  -> FastAPI backend (hostname API)
-  -> Firebase Authentication, Firestore, dan provider LLM/data
+     -> Firebase Authentication + read-only Firestore history
+     -> FastAPI backend (options + launch only)
+        -> Firestore writes + provider LLM/data
 ```
 
 Repository Python ini **tidak menyediakan `render.yaml`** dan tidak lagi
@@ -23,10 +24,14 @@ membuat service.
 ## 1. Siapkan frontend dan Firebase
 
 1. Selesaikan setup Firestore dan Authentication di
-   [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md) dan
-   [`FIREBASE_AUTH_SETUP.md`](FIREBASE_AUTH_SETUP.md).
+   [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md).
 2. Buat repository frontend React + Vite terpisah menggunakan spesifikasi
-   lengkap [`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md).
+   lengkap [`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md). Jika frontend
+   dibuat dari prompt versi lama yang masih menggunakan API untuk login atau
+   history, terapkan migrasi
+   [`REACT_FRONTEND_DIRECT_FIREBASE_PROMPT.md`](REACT_FRONTEND_DIRECT_FIREBASE_PROMPT.md).
+   Direct Firebase Auth dan direct read-only Firestore history adalah satu-satunya
+   arsitektur frontend yang didukung.
 3. Tentukan dua hostname deployment, misalnya:
 
    ```text
@@ -42,6 +47,10 @@ membuat service.
 Jangan commit `.env` atau service-account JSON. Service-account key, API key
 Gemini, dan semua secret lain hanya boleh berada pada backend; jangan pernah
 menyalinnya ke repository frontend atau variabel `VITE_*`.
+
+Frontend repository juga menjadi satu-satunya pemilik `firebase.json`,
+`firestore.rules`, dan `firestore.indexes.json`. Deploy rules read-only berbasis
+membership dari repository frontend sebelum membuka aplikasi kepada user.
 
 ## 2. Buat backend Web Service secara manual
 
@@ -67,8 +76,10 @@ menyalinnya ke repository frontend atau variabel `VITE_*`.
    lock, dan antrean bersifat process-local.
 
 FastAPI root hanya mengembalikan metadata service. Endpoint health berada di
-`/api/health`, dokumentasi interaktif di `/api/docs`, dan aplikasi React berada
-pada hostname frontend yang berbeda.
+`/api/health`, dokumentasi interaktif di `/api/docs`, dan schema OpenAPI di
+`/api/openapi.json`; keempat route tersebut termasuk root bersifat publik.
+Hanya `GET /api/options` dan `POST /api/runs` yang menjadi route aplikasi
+terproteksi. Aplikasi React berada pada hostname frontend yang berbeda.
 
 ## 3. Konfigurasikan environment backend
 
@@ -84,9 +95,6 @@ FIREBASE_COLLECTION=trading_runs
 FIREBASE_CREDENTIALS_PATH=/etc/secrets/firebase-service-account.json
 
 WEB_AUTH_REQUIRED=true
-FIREBASE_WEB_API_KEY=AIza...
-FIREBASE_AUTH_DOMAIN=project-id-anda.firebaseapp.com
-FIREBASE_WEB_APP_ID=1:123456789:web:abcdef123456
 WEB_AUTH_ALLOWED_EMAILS=anda@gmail.com
 
 # Origin frontend persis, bukan URL backend dan bukan wildcard.
@@ -94,7 +102,6 @@ WEB_CORS_ORIGINS=https://tradingagents-ui.onrender.com
 
 # Konservatif untuk instance kecil.
 WEB_RUN_QUEUE_LIMIT=1
-WEB_LIVE_CACHE_TTL_SECONDS=60
 OMP_NUM_THREADS=1
 OPENBLAS_NUM_THREADS=1
 MKL_NUM_THREADS=1
@@ -108,9 +115,11 @@ dinormalisasi, tetapi format canonical tanpa slash lebih jelas. Jika Anda juga
 memiliki preview frontend dengan hostname tetap, tambahkan origin tersebut
 secara eksplisit; jangan membuka semua origin.
 
-CORS bukan autentikasi. Frontend harus memperoleh Firebase ID token,
-memverifikasi session melalui backend, lalu mengirim `Authorization: Bearer
-<token>` pada setiap request options, run, polling, dan history yang dilindungi.
+CORS bukan autentikasi. Login dan pembacaan history tidak melewati backend.
+Frontend memperoleh Firebase ID token sendiri dan mengirim `Authorization:
+Bearer <token>` hanya ke dua endpoint backend yang dilindungi: `GET
+/api/options` dan `POST /api/runs`. Backend tetap harus memverifikasi token dan
+`WEB_AUTH_ALLOWED_EMAILS` sebelum menerima operasi analisis.
 
 ## 4. Upload service account sebagai Secret File
 
@@ -134,6 +143,15 @@ atau pada penyedia static hosting lain. Konfigurasikan build-time environment:
 
 ```dotenv
 VITE_TRADINGAGENTS_API_URL=https://tradingagents-api.onrender.com
+VITE_FIREBASE_API_KEY=AIza...
+VITE_FIREBASE_AUTH_DOMAIN=project-id-anda.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=project-id-anda
+VITE_FIREBASE_APP_ID=1:123456789:web:abcdef123456
+
+# Opsional, jika tersedia pada firebaseConfig Web App.
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
+VITE_FIREBASE_STORAGE_BUCKET=project-id-anda.firebasestorage.app
+VITE_FIREBASE_MEASUREMENT_ID=G-XXXXXXXXXX
 ```
 
 Untuk struktur Vite standar, gunakan:
@@ -143,9 +161,11 @@ Build command:     npm ci && npm run build
 Publish directory: dist
 ```
 
-Hanya Firebase Web App config publik yang diterima frontend dari
-`/api/auth/config`. Jangan membuat variabel frontend untuk service-account JSON,
-`GOOGLE_API_KEY`, atau secret backend lain.
+Nilai `VITE_FIREBASE_*` berasal dari Firebase Web App `firebaseConfig` dan
+merupakan konfigurasi client publik, bukan service-account credential. Jangan
+pernah membuat variabel frontend untuk service-account JSON, `GOOGLE_API_KEY`,
+atau secret backend lain. Login dan history harus tetap dapat digunakan ketika
+hostname backend sedang cold start atau offline.
 
 Setelah hostname frontend final diketahui, pastikan dua konfigurasi berikut
 persis cocok lalu redeploy bila Anda mengubahnya:
@@ -161,11 +181,14 @@ persis cocok lalu redeploy bila Anda mengubahnya:
    aplikasi terpisah; halaman login frontend tidak tersedia pada URL API.
 3. Buka `https://tradingagents-ui.onrender.com`, login, dan jalankan satu
    analisis Shallow dengan satu analyst.
-4. Pada Browser DevTools, pastikan protected API requests menuju hostname
-   backend dan membawa header Bearer. Jangan menampilkan atau menyalin token ke
-   log.
-5. Pastikan hasil muncul kembali di Daily History dan collection `trading_runs`
-   beserta subcollection `events` terlihat di Firebase Console.
+4. Pada Browser DevTools, pastikan login dan Daily History berkomunikasi langsung
+   dengan Firebase. Hanya `GET /api/options` dan `POST /api/runs` yang menuju
+   hostname backend dengan header Bearer. Jangan menampilkan atau menyalin token
+   ke log.
+5. Pastikan hasil aktif diperbarui melalui listener Firestore tanpa request
+   status berulang ke backend, lalu muncul kembali di Daily History.
+   Collection `trading_runs` beserta subcollection `events` harus terlihat di
+   Firebase Console.
 
 Jika health masih menunjukkan local JSON, periksa nama Secret File,
 `FIREBASE_CREDENTIALS_PATH`, `FIREBASE_PROJECT_ID`, database ID, IAM service
@@ -183,12 +206,12 @@ filesystem ephemeral. Detail angkanya dapat berubah, tetapi konsekuensinya tetap
   hilang saat spin-down, restart, atau redeploy;
 - background analysis dapat terputus ketika Render menghentikan atau me-restart
   backend;
-- pertahankan frontend terbuka saat analisis berlangsung. Polling frontend
-  menghasilkan inbound request ke backend, tetapi bukan jaminan bahwa platform
-  tidak akan melakukan restart;
+- mempertahankan frontend terbuka hanya menjaga listener Firestore; aktivitas
+  tersebut tidak menjaga backend Render tetap hidup dan tidak menjamin platform
+  tidak melakukan restart;
 - gunakan satu worker dan `WEB_RUN_QUEUE_LIMIT=1` pada resource sangat kecil;
-- static frontend terpisah tidak menyimpan history dan tidak menggantikan
-  Firestore.
+- static frontend terpisah membaca history langsung dari Firestore. Ia tidak
+  dapat membaca fallback JSON pada filesystem backend.
 
 Ollama pada laptop tidak dapat dicapai melalui
 `http://localhost:11434` dari backend Render: `localhost` di sana berarti mesin

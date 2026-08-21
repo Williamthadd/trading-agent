@@ -1,4 +1,4 @@
-from tradingagents.webapp.storage import LocalJsonRunStore, build_run_store
+from tradingagents.webapp.storage import FirestoreRunStore, LocalJsonRunStore, build_run_store
 
 
 def test_local_run_store_persists_runs_and_orders_events(tmp_path):
@@ -38,3 +38,38 @@ def test_build_run_store_can_be_forced_to_local_json(monkeypatch, tmp_path):
     assert isinstance(store, LocalJsonRunStore)
     assert store.backend_name == "local-json"
     assert store.configured is False
+
+
+def test_firestore_update_does_not_read_document_after_successful_merge(tmp_path):
+    class DocumentReference:
+        def __init__(self):
+            self.writes = []
+
+        def set(self, payload, merge=False):
+            self.writes.append((dict(payload), merge))
+
+    class CollectionReference:
+        def __init__(self):
+            self.documents = {}
+
+        def document(self, document_id):
+            return self.documents.setdefault(document_id, DocumentReference())
+
+    class Client:
+        def __init__(self):
+            self.collections = {}
+
+        def collection(self, name):
+            return self.collections.setdefault(name, CollectionReference())
+
+    client = Client()
+    store = FirestoreRunStore(client, LocalJsonRunStore(tmp_path))
+    store.create_run({"run_id": "run-001", "status": "queued"})
+
+    updated = store.update_run("run-001", {"status": "running"})
+
+    reference = client.collection("trading_runs").document("run-001")
+    assert reference.writes[-1][1] is True
+    assert updated["run_id"] == "run-001"
+    assert updated["status"] == "running"
+    assert store.configured is True

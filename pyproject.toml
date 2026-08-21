@@ -39,7 +39,7 @@ dev = [
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
-# Backend API, Firebase Authentication, and optional Firestore persistence.
+# Backend API, Firebase Bearer verification, and optional Firestore persistence.
 # Kept as an extra so the core CLI installation remains lightweight.
 api = [
     "fastapi>=0.115.0",

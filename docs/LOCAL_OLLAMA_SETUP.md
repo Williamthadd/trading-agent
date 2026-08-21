@@ -90,11 +90,27 @@ tradingagents-api
 The backend runs at <http://127.0.0.1:8000>; its root returns API metadata, not
 the UI. Create and run the standalone React + Vite frontend by following
 [`REACT_FRONTEND_PROMPT.md`](REACT_FRONTEND_PROMPT.md). Its local environment
-must point to the backend:
+must contain the backend URL and public Firebase Web App configuration:
 
 ```dotenv
 VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
+VITE_FIREBASE_API_KEY=your-public-web-api-key
+VITE_FIREBASE_AUTH_DOMAIN=your-project-id.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-project-id
+VITE_FIREBASE_APP_ID=your-web-app-id
 ```
+
+The frontend performs Firebase login and read-only Firestore history access
+directly, so both remain available while FastAPI is stopped. Deploy the
+frontend-owned membership Security Rules described by
+[`REACT_FRONTEND_DIRECT_FIREBASE_PROMPT.md`](REACT_FRONTEND_DIRECT_FIREBASE_PROMPT.md)
+and add the permitted Firebase UID before testing history. FastAPI is needed
+only to fetch protected runtime options and start a new analysis; it verifies a
+fresh Firebase Bearer token on `GET /api/options` and `POST /api/runs`. Active
+status, events, reports, and the final decision then arrive through Firestore
+listeners rather than repeated backend status requests. The frontend must keep
+Launch disabled unless the fresh options response reports Firebase storage;
+local JSON fallback data cannot be read directly by the browser.
 
 Run `npm install` and `npm run dev` in the frontend repository, then open
 <http://localhost:5173>, log in, and select one of:
@@ -158,7 +174,9 @@ Invoke-RestMethod -Method Post -Uri http://localhost:11434/api/chat `
 Firebase Authentication, Firestore history, Yahoo market data, and optional
 news/data sources still use the internet. Selecting Llama makes the LLM local;
 it does not make the entire TradingAgents application offline. The frontend
-must send a Firebase ID token as a Bearer token on every protected backend call.
+uses its Firebase session directly for login and read-only history, and sends a
+fresh ID token only when calling the protected backend options or launch route.
 Firebase service-account JSON, `GOOGLE_API_KEY`, and all other server secrets
 remain in the backend environment only and must never be copied into the React
-repository or its `VITE_*` variables.
+repository or its `VITE_*` variables. The `VITE_FIREBASE_*` Web App values are
+public client configuration, not service-account secrets.

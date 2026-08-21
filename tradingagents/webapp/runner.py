@@ -1,4 +1,4 @@
-"""Background TradingAgents execution and polling state management."""
+"""Background TradingAgents execution and durable run persistence."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ def utc_now() -> str:
 
 
 def local_date_key() -> str:
-    """Return the server's local calendar day for the history sidebar."""
+    """Return the server-local creation day indexed by the Firestore frontend."""
     return datetime.now().astimezone().date().isoformat()
 
 
@@ -179,7 +179,7 @@ def redact_secrets(value: Any) -> Any:
     """Recursively remove common credentials before API/storage exposure.
 
     Environment variables are inspected once per payload instead of once for
-    every scalar field. Large polling responses can contain thousands of
+    every scalar field. Large event and report payloads can contain thousands of
     fields, so this avoids repeated process-environment scans without changing
     the redaction rules.
     """
@@ -282,18 +282,14 @@ class RunManager:
         self._lock = threading.RLock()
         self._execution_lock = _GRAPH_EXECUTION_LOCK
         self._live: dict[str, dict[str, Any]] = {}
-        self._events: dict[str, list[dict[str, Any]]] = {}
         self._sequences: dict[str, int] = {}
         self._threads: dict[str, threading.Thread] = {}
-        self._cache_deadlines: dict[str, float] = {}
         self._reservations = 0
         self.queue_limit = self._read_queue_limit()
-        self.cache_ttl_seconds = self._read_cache_ttl()
         self._reconcile_stale_runs()
 
     @property
     def active_count(self) -> int:
-        self._evict_expired_terminal_runs()
         with self._lock:
             return self._reservations + sum(
                 record.get("status") in {"queued", "running"} for record in self._live.values()
@@ -311,37 +307,6 @@ class RunManager:
         if not 1 <= value <= 100:
             raise RuntimeConfigurationError("WEB_RUN_QUEUE_LIMIT must be between 1 and 100")
         return value
-
-    @staticmethod
-    def _read_cache_ttl() -> int:
-        raw = os.getenv("WEB_LIVE_CACHE_TTL_SECONDS", "300").strip()
-        try:
-            value = int(raw)
-        except ValueError as exc:
-            raise RuntimeConfigurationError(
-                f"WEB_LIVE_CACHE_TTL_SECONDS must be an integer, got {raw!r}"
-            ) from exc
-        if not 0 <= value <= 86_400:
-            raise RuntimeConfigurationError(
-                "WEB_LIVE_CACHE_TTL_SECONDS must be between 0 and 86400"
-            )
-        return value
-
-    def _mark_terminal_cache(self, run_id: str) -> None:
-        with self._lock:
-            self._cache_deadlines[run_id] = time.monotonic() + self.cache_ttl_seconds
-
-    def _evict_expired_terminal_runs(self) -> None:
-        now = time.monotonic()
-        with self._lock:
-            expired = [
-                run_id for run_id, deadline in self._cache_deadlines.items() if deadline <= now
-            ]
-            for run_id in expired:
-                self._live.pop(run_id, None)
-                self._events.pop(run_id, None)
-                self._sequences.pop(run_id, None)
-                self._cache_deadlines.pop(run_id, None)
 
     def _reconcile_stale_runs(self) -> None:
         """Mark work abandoned by a previous server process as failed."""
@@ -503,7 +468,6 @@ class RunManager:
 
             with self._lock:
                 self._live[run_id] = record
-                self._events[run_id] = []
                 self._sequences[run_id] = 0
                 self._reservations -= 1
                 reservation_held = False
@@ -512,13 +476,15 @@ class RunManager:
                 with self._lock:
                     self._reservations -= 1
 
-        self._emit(
+        queued_event = self._emit(
             run_id,
             event_type="status",
             agent="System",
             status="queued",
             message=f"Analysis for {request.ticker} was queued.",
         )
+        accepted = copy.deepcopy(record)
+        accepted["events"] = [queued_event]
         try:
             thread = threading.Thread(
                 target=self._worker,
@@ -536,91 +502,7 @@ class RunManager:
             raise RuntimeConfigurationError(
                 "Unable to start the background analysis worker."
             ) from exc
-        return self.get_run(run_id) or copy.deepcopy(record)
-
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
-        self._evict_expired_terminal_runs()
-        # Polling an active run must stay in memory. Reading its Firestore event
-        # subcollection on every frontend poll would repeatedly bill all events
-        # accumulated so far. Storage is consulted only for runs not owned by
-        # this process (for example, history restored after a restart).
-        with self._lock:
-            live = copy.deepcopy(self._live.get(run_id))
-            live_events = copy.deepcopy(self._events.get(run_id, []))
-
-        if live is not None:
-            # Live records and events are sanitized before entering the cache.
-            # Avoid recursively redacting, de-duplicating, and reconstructing
-            # the entire growing response on every 1.6-second frontend poll.
-            live["events"] = sorted(
-                live_events,
-                key=lambda event: (event.get("sequence", 0), event.get("created_at", "")),
-            )
-            return live
-
-        try:
-            stored = self.store.get_run(run_id)
-            stored_events = self.store.get_events(run_id) if stored else []
-        except Exception as exc:
-            raise RunStoreUnavailable(safe_error(exc)) from exc
-        if stored is None:
-            return None
-
-        record: dict[str, Any] = {}
-        if isinstance(stored, dict):
-            record.update(redact_secrets(stored))
-        events_by_id: dict[str, dict[str, Any]] = {}
-        for event in stored_events or []:
-            if not isinstance(event, dict):
-                continue
-            event = redact_secrets(event)
-            event_id = str(event.get("event_id") or event.get("id") or uuid.uuid4().hex)
-            event.setdefault("event_id", event_id)
-            event.setdefault("id", event_id)
-            event.setdefault("timestamp", event.get("created_at"))
-            events_by_id[event_id] = event
-        events = sorted(
-            events_by_id.values(),
-            key=lambda event: (event.get("sequence", 0), event.get("created_at", "")),
-        )
-        record["events"] = events
-
-        # Reports are persisted as independent events to stay under Firestore's
-        # one-document size limit. Rebuild them when serving historical runs.
-        reports = dict(record.get("reports") or {})
-        for event in events:
-            if event.get("type") == "report" and event.get("report_key"):
-                reports[str(event["report_key"])] = event.get("content", "")
-        record["reports"] = reports
-        return record
-
-    def list_runs(self, date_key: str | None = None) -> list[dict[str, Any]]:
-        self._evict_expired_terminal_runs()
-        try:
-            stored_runs = self.store.list_runs(date_key)
-        except Exception as exc:
-            raise RunStoreUnavailable(safe_error(exc)) from exc
-
-        by_id: dict[str, dict[str, Any]] = {}
-        for record in stored_runs or []:
-            if isinstance(record, dict) and record.get("run_id"):
-                by_id[str(record["run_id"])] = redact_secrets(record)
-        with self._lock:
-            live_runs = copy.deepcopy(list(self._live.values()))
-        for record in live_runs:
-            if date_key and record.get("date_key") != date_key:
-                continue
-            run_id = str(record["run_id"])
-            by_id.setdefault(run_id, {}).update(redact_secrets(record))
-
-        summaries = []
-        for record in by_id.values():
-            summary = dict(record)
-            summary.pop("events", None)
-            # Full reports remain available from the detail endpoint.
-            summary.pop("reports", None)
-            summaries.append(summary)
-        return sorted(summaries, key=lambda item: item.get("created_at", ""), reverse=True)
+        return accepted
 
     def _worker(self, run_id: str, request: RunRequest) -> None:
         started: float | None = None
@@ -654,7 +536,7 @@ class RunManager:
 
     def _execute_graph(self, run_id: str, request: RunRequest) -> None:
         # Importing the trading graph pulls in pandas, LangChain, and every
-        # agent definition. Keep the idle web/login process lean and pay that
+        # agent definition. Keep the idle API process lean and pay that
         # cost only when a user actually starts an analysis.
         from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -720,11 +602,6 @@ class RunManager:
         )
         decision = graph.process_signal(final_decision)
         safe_decision = redact_secrets(decision)
-        safe_final_decision = _bounded_text(final_decision, 200_000)
-        with self._lock:
-            record = self._live[run_id]
-            record["decision"] = safe_decision
-            record["reports"]["final_trade_decision"] = safe_final_decision
         self._update(run_id, decision=safe_decision)
 
     def _process_messages(
@@ -819,8 +696,6 @@ class RunManager:
             return
         previous_reports.update(changed)
         bounded_changed = {key: _bounded_text(value, 200_000) for key, value in changed.items()}
-        with self._lock:
-            self._live[run_id]["reports"].update(bounded_changed)
 
         for report_key, content in bounded_changed.items():
             agent, label = REPORT_SPECS[report_key]
@@ -965,7 +840,7 @@ class RunManager:
             status="completed",
             message="TradingAgents analysis completed successfully.",
         )
-        self._mark_terminal_cache(run_id)
+        self._release_terminal_state(run_id)
 
     def _fail(self, run_id: str, exc: BaseException, duration_seconds: float) -> None:
         error = safe_error(exc)
@@ -990,7 +865,13 @@ class RunManager:
             status="failed",
             message=error,
         )
-        self._mark_terminal_cache(run_id)
+        self._release_terminal_state(run_id)
+
+    def _release_terminal_state(self, run_id: str) -> None:
+        """Release response-only state after Firestore/local persistence finishes."""
+        with self._lock:
+            self._live.pop(run_id, None)
+            self._sequences.pop(run_id, None)
 
     def _update(self, run_id: str, **updates: Any) -> None:
         safe_updates = redact_secrets(updates)
@@ -1039,8 +920,6 @@ class RunManager:
                 **extra,
             }
         )
-        with self._lock:
-            self._events.setdefault(run_id, []).append(copy.deepcopy(event))
         try:
             self.store.append_event(run_id, copy.deepcopy(event))
         except Exception as exc:

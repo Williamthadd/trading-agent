@@ -22,8 +22,6 @@ from tradingagents.webapp.storage import LocalJsonRunStore
 
 def _fake_execute_graph(self, run_id, request):
     report = f"Synthetic market report for {request.ticker}."
-    with self._lock:
-        self._live[run_id]["reports"]["market_report"] = report
     self._emit(
         run_id,
         event_type="report",
@@ -33,7 +31,25 @@ def _fake_execute_graph(self, run_id, request):
         report_key="market_report",
         content=report,
     )
+    self._emit(
+        run_id,
+        event_type="report",
+        agent="Portfolio Manager",
+        status="updated",
+        message="Final Trading Decision updated.",
+        report_key="final_trade_decision",
+        content="## Final Trading Decision\n\n**Rating:** BUY",
+    )
     self._update(run_id, decision={"action": "BUY", "summary": "Synthetic test result."})
+
+
+def _wait_for_persisted_run(store, run_id, *, attempts=100):
+    for _ in range(attempts):
+        run = store.get_run(run_id)
+        if run and run.get("status") in {"completed", "failed"}:
+            return run
+        time.sleep(0.01)
+    raise AssertionError(f"run {run_id} did not reach a terminal state")
 
 
 def test_secret_redaction_preserves_non_secret_key_fields():
@@ -268,76 +284,6 @@ def test_queue_reservation_blocks_a_concurrent_submission(monkeypatch, tmp_path)
     assert len(store.list_runs()) == 1
 
 
-def test_terminal_run_cache_expires_and_falls_back_to_persisted_data(monkeypatch, tmp_path):
-    monkeypatch.setenv("WEB_LIVE_CACHE_TTL_SECONDS", "0")
-    store = LocalJsonRunStore(tmp_path)
-    run_id = "a" * 32
-    store.create_run(
-        {
-            "run_id": run_id,
-            "status": "completed",
-            "date_key": "2026-08-16",
-            "decision": "Buy",
-        }
-    )
-    store.append_event(
-        run_id,
-        {
-            "event_id": "persisted-report",
-            "sequence": 1,
-            "type": "report",
-            "report_key": "market_report",
-            "content": "Persisted market report",
-        },
-    )
-    manager = RunManager(store)
-    manager._live[run_id] = {
-        "run_id": run_id,
-        "status": "completed",
-        "reports": {"market_report": "Live-only report"},
-    }
-    manager._events[run_id] = []
-    manager._sequences[run_id] = 99
-    manager._mark_terminal_cache(run_id)
-
-    detail = manager.get_run(run_id)
-
-    assert run_id not in manager._live
-    assert run_id not in manager._events
-    assert run_id not in manager._sequences
-    assert run_id not in manager._cache_deadlines
-    assert detail["status"] == "completed"
-    assert detail["reports"]["market_report"] == "Persisted market report"
-
-
-def test_live_poll_uses_pre_sanitized_cache_without_reprocessing(monkeypatch, tmp_path):
-    manager = RunManager(LocalJsonRunStore(tmp_path))
-    run_id = "b" * 32
-    manager._live[run_id] = {
-        "run_id": run_id,
-        "status": "running",
-        "reports": {"market_report": "Safe cached report"},
-    }
-    manager._events[run_id] = [
-        {
-            "event_id": "safe-event",
-            "sequence": 1,
-            "created_at": "2026-08-17T00:00:00Z",
-            "message": "Safe cached event",
-        }
-    ]
-
-    def fail_reprocessing(_value):
-        raise AssertionError("live polling should not redact the full cache again")
-
-    monkeypatch.setattr(web_runner, "redact_secrets", fail_reprocessing)
-
-    detail = manager.get_run(run_id)
-
-    assert detail["reports"]["market_report"] == "Safe cached report"
-    assert detail["events"][0]["message"] == "Safe cached event"
-
-
 def test_web_api_returns_429_when_run_queue_is_full(monkeypatch, tmp_path):
     monkeypatch.setenv("WEB_RUN_QUEUE_LIMIT", "1")
     monkeypatch.setenv("WEB_HOST", "127.0.0.1")
@@ -508,13 +454,14 @@ def test_thread_start_failure_marks_persisted_run_failed(monkeypatch, tmp_path):
     assert run["error"] == "worker creation refused"
     assert manager.active_count == 0
     assert manager._threads == {}
-    assert run["run_id"] in manager._cache_deadlines
+    assert run["run_id"] not in manager._live
+    assert run["run_id"] not in manager._sequences
     events = store.get_events(run["run_id"])
     assert [event["type"] for event in events] == ["status", "error"]
     assert events[-1]["message"] == "worker creation refused"
 
 
-def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path):
+def test_web_api_runs_mock_graph_and_persists_direct_firestore_shape(monkeypatch, tmp_path):
     monkeypatch.setenv("FIREBASE_ENABLED", "false")
     monkeypatch.delenv("WEB_CORS_ORIGINS", raising=False)
     monkeypatch.setenv("WEB_LOCAL_DATA_DIR", str(tmp_path / "implicit-store"))
@@ -523,11 +470,7 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
 
     # Import after WEB_LOCAL_DATA_DIR is isolated because the module also exports
     # a ready-to-run global ASGI app.
-    from tradingagents.webapp.main import _public_backend_url, create_app
-
-    assert _public_backend_url("https://example.com/v1/") == "https://example.com/v1"
-    assert _public_backend_url("https://user:secret@example.com/v1") is None
-    assert _public_backend_url("https://example.com/v1?api_key=secret") is None
+    from tradingagents.webapp.main import create_app
 
     store = LocalJsonRunStore(tmp_path / "api-store")
     client = TestClient(create_app(store, auth_required=False))
@@ -614,33 +557,31 @@ def test_web_api_runs_mock_graph_and_returns_daily_history(monkeypatch, tmp_path
     )
     assert response.status_code == 202
     run_id = response.json()["run_id"]
+    assert response.json()["status"] == "queued"
+    assert response.json()["events"][0]["type"] == "status"
 
-    detail = None
-    for _ in range(50):
-        detail_response = client.get(f"/api/runs/{run_id}")
-        assert detail_response.status_code == 200
-        detail = detail_response.json()
-        if detail["status"] in {"completed", "failed"}:
-            break
-        time.sleep(0.01)
-
-    assert detail is not None
+    detail = _wait_for_persisted_run(store, run_id)
     assert detail["status"] == "completed"
-    assert detail["reports"]["market_report"].startswith("Synthetic")
-    report_events = [event for event in detail["events"] if event["type"] == "report"]
-    assert report_events[0]["report_key"] == "market_report"
+    report_events = {
+        event["report_key"]: event
+        for event in store.get_events(run_id)
+        if event["type"] == "report"
+    }
+    assert report_events["market_report"]["content"].startswith("Synthetic")
+    assert "BUY" in report_events["final_trade_decision"]["content"]
     assert detail["decision"]["action"] == "BUY"
+    assert store.list_runs(detail["date_key"])[0]["run_id"] == run_id
+    assert run_id not in client.app.state.run_manager._live
+    assert run_id not in client.app.state.run_manager._sequences
 
-    # A live run is served entirely from memory, avoiding repeated Firestore
-    # document/subcollection reads on every browser polling interval.
-    monkeypatch.setattr(store, "get_run", lambda _run_id: (_ for _ in ()).throw(AssertionError))
-    monkeypatch.setattr(store, "get_events", lambda _run_id: (_ for _ in ()).throw(AssertionError))
-    assert client.get(f"/api/runs/{run_id}").status_code == 200
-
-    history = client.get("/api/history", params={"date": detail["date_key"]})
-    assert history.status_code == 200
-    assert history.json()["count"] == 1
-    assert history.json()["runs"][0]["run_id"] == run_id
+    for removed_path in (
+        f"/api/runs/{run_id}",
+        "/api/history",
+        f"/api/history/{run_id}",
+        "/api/auth/config",
+        "/api/auth/session",
+    ):
+        assert client.get(removed_path).status_code == 404
 
     index = client.get("/")
     assert index.status_code == 200
@@ -688,11 +629,7 @@ def test_web_api_accepts_local_llama_without_google_key(monkeypatch, tmp_path):
 
     assert response.status_code == 202
     run_id = response.json()["run_id"]
-    for _ in range(50):
-        detail = client.get(f"/api/runs/{run_id}").json()
-        if detail["status"] in {"completed", "failed"}:
-            break
-        time.sleep(0.01)
+    detail = _wait_for_persisted_run(store, run_id)
 
     assert detail["status"] == "completed"
     assert detail["llm_provider"] == "ollama"

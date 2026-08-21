@@ -1,80 +1,104 @@
 # Copy-paste prompt: build the standalone TradingAgents React frontend
 
-Use the complete prompt below inside the **new, empty frontend repository**. It
-is intentionally self-contained because the Python repository no longer ships
-the legacy HTML/CSS/JavaScript application.
+Use everything below the horizontal rule as one self-contained implementation
+prompt inside a **new, empty frontend repository**. The Python repository is an
+API-only analysis engine; it does not provide authentication UI, history-read
+endpoints, or frontend assets.
 
 ---
 
 ## Role and objective
 
-You are a senior frontend engineer and UI systems designer. Build a complete,
-production-quality **React + Vite + TypeScript** frontend for the TradingAgents
-backend. Do not merely write a plan: create every source file, configuration,
-test, and README needed to install and run it.
+You are a senior React, TypeScript, Firebase, Firestore Security Rules, testing,
+accessibility, and UI-systems engineer. Build and verify a complete
+production-quality **React + Vite + TypeScript** frontend. Do not merely provide
+a plan or disconnected snippets: create every source file, configuration,
+ruleset, test, asset integration, and README required to install and run it.
 
-The result must reproduce the existing TradingAgents Bloomberg-terminal-style
-workstation as closely as possible in layout, density, colors, typography,
-copy, interaction, responsive behavior, authentication, reports, and final
-decision rendering. It must not look like a generic SaaS dashboard.
+Reproduce the TradingAgents Bloomberg-terminal-style workstation as closely as
+possible in layout, density, color, typography, copy, interaction, responsive
+behavior, login, reports, and Final Trading Decision. It must not look like a
+generic SaaS dashboard.
+
+Use this architecture from the first commit:
+
+```text
+Firebase Authentication ----> React login and persisted session
+Cloud Firestore -------------> Daily History, selected-run detail, live events,
+                               reports, and Final Trading Decision
+FastAPI TradingAgents -------> health, runtime options, and POST new analysis
+Gemini/Ollama/agents --------> remain private behind FastAPI
+```
 
 The backend is a separate local project and process:
 
 - Backend repository: `W:\AI\Agent\TradingAgents`
 - Backend API: `http://127.0.0.1:8000`
 - Frontend dev server: `http://localhost:5173`
-- API environment variable: `VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000`
-- The backend already allows the exact local Vite origins through CORS.
-- Never modify, embed, copy, or launch the Python backend from this repository.
-- Never access Firestore directly. All application data goes through the API.
+- Never modify, embed, copy, or launch Python code from this repository.
+- Login and Firestore history must work when FastAPI is stopped.
+- FastAPI is required only for health/options and starting a new analysis.
 
-If the frontend repository is elsewhere, keep the API URL configurable rather
-than hardcoding filesystem locations. The only asset to copy from the backend
-is `W:\AI\Agent\TradingAgents\assets\logo.png`; place it at
-`public/logo.png`. If that path is unavailable, stop and ask for the logo
-instead of inventing a replacement.
+The only asset to copy from the backend is
+`W:\AI\Agent\TradingAgents\assets\logo.png`; place it at `public/logo.png`. If
+that path is unavailable, stop and ask for the logo rather than inventing one.
+
+## Scope and limitations
+
+When FastAPI is offline, the signed-in user must still be able to browse every
+authorized Firestore-backed run, event, report, and decision. Preserve the
+complete workstation in a read-only `HISTORY ONLY` mode and disable only the
+analysis-engine controls.
+
+This does not make the application internet-independent. With FastAPI stopped,
+the frontend cannot launch agents, invoke Gemini/Ollama, retrieve fresh runtime
+options, read backend local-JSON fallback files, or repair a stale interrupted
+run. Only documents already stored in Cloud Firestore are directly available.
+
+The current schema has no `owner_uid`. History is shared among the small set of
+Firebase UIDs explicitly approved through membership documents. Never label it
+as private per-user history.
 
 ## Non-negotiable requirements
 
-1. Use React, TypeScript in strict mode, and Vite.
-2. Use the npm Firebase modular SDK for Authentication only.
-3. Implement Google popup login and existing email/password login. There is no
-   registration, sign-up link, account creation call, or password-reset UI.
-4. Verify the Firebase ID token with the Python backend before revealing the
-   workstation.
-5. Send `Authorization: Bearer <Firebase ID token>` on every protected request.
-6. Consume `/api/options`; do not hardcode providers, models, analysts,
-   languages, research depths, defaults, or storage state into form logic.
-7. Poll active runs, display events/reports/final decision, and implement daily
-   history with the contracts below.
-8. Preserve the exact dense dark terminal design. No Tailwind, Bootstrap,
-   Material UI, Chakra, Ant, shadcn, or generic component theme.
-9. Use semantic HTML and accessible keyboard behavior.
-10. Never use `dangerouslySetInnerHTML`, `innerHTML`, `eval`, raw-HTML Markdown
+1. Use React, TypeScript strict mode, and Vite.
+2. Use the modular Firebase Web SDK for both Authentication and read-only
+   Firestore access.
+3. Implement Google popup login and existing email/password login. Provide no
+   registration, sign-up, create-user, anonymous-auth, or password-reset UI.
+4. Initialize Firebase solely from public `VITE_FIREBASE_*` variables.
+5. Login, logout, auth restoration, history, archived reports, and decisions
+   must never depend on FastAPI.
+6. Send a fresh Firebase ID token only to protected `GET /api/options` and
+   `POST /api/runs`; the backend still authorizes analysis calls.
+7. Read run documents and event subcollections directly through typed Firestore
+   repositories and live listeners. Never poll FastAPI for run state.
+8. Consume `/api/options`; never hardcode form providers, models, analysts,
+   languages, depths, defaults, or storage state.
+9. Preserve the exact dense dark terminal design. Do not use Tailwind,
+   Bootstrap, Material UI, Chakra, Ant, shadcn, or another generic theme.
+10. Use semantic HTML and fully accessible keyboard behavior.
+11. Never use `dangerouslySetInnerHTML`, `innerHTML`, `eval`, raw-HTML Markdown
     plugins, or remotely loaded Markdown images.
-11. LLM output and API error strings are untrusted input.
-12. Do not put Firebase service-account JSON, Gemini keys, Ollama credentials,
-    or any server secret in this project. The Firebase Web config returned by
-    `/api/auth/config` is public client configuration and is the only Firebase
-    config the app needs.
-13. Keep the frontend and backend independently runnable and independently
-    testable.
+12. Treat Firestore content, LLM output, and API error strings as untrusted.
+13. Never place a Firebase service account, LLM key, Ollama credential, private
+    key, or ID token in source, `VITE_*`, logs, analytics, or localStorage.
+14. Keep frontend, backend, Firebase, and their tests independently runnable.
 
 ## Required stack and scripts
 
 Use stable current releases compatible with the installed Node LTS:
 
-- `react`, `react-dom`
-- `firebase`
-- either a carefully restricted `react-markdown` + `remark-gfm` integration or
-  a small DOM-safe Markdown subset implemented in TypeScript; raw HTML must
-  never be enabled
-- `vite`, `typescript`, `@vitejs/plugin-react`
-- ESLint with React/TypeScript rules
-- Vitest, React Testing Library, `@testing-library/user-event`, MSW
-- Playwright for desktop/mobile visual and end-to-end checks
+- `react`, `react-dom`, `firebase`;
+- either restricted `react-markdown` + `remark-gfm` or a small DOM-safe Markdown
+  subset; never enable raw HTML;
+- `vite`, `typescript`, `@vitejs/plugin-react`;
+- ESLint with React/TypeScript rules;
+- Vitest, React Testing Library, `@testing-library/user-event`, and MSW;
+- `@firebase/rules-unit-testing` and pinned `firebase-tools` for rules tests;
+- Playwright for desktop/mobile visual and end-to-end checks.
 
-Provide these scripts:
+Provide at least these scripts, adapting only shell quoting for portability:
 
 ```json
 {
@@ -84,23 +108,79 @@ Provide these scripts:
   "lint": "eslint .",
   "test": "vitest run",
   "test:watch": "vitest",
-  "test:e2e": "playwright test"
+  "test:e2e": "playwright test",
+  "firebase:emulators": "firebase emulators:start --only firestore",
+  "test:rules": "firebase emulators:exec --only firestore \"vitest run src/test/firestore.rules.test.ts\"",
+  "firebase:deploy:rules": "firebase deploy --only firestore:rules"
 }
 ```
+
+If nested quoting is unreliable on Windows, add a small Node runner instead of
+leaving a broken script.
+
+## Environment contract
 
 Create `.env.example`:
 
 ```dotenv
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_APP_ID=
+
+# This frontend contract intentionally supports the default Firestore database.
+VITE_FIREBASE_DATABASE_ID=(default)
+
+# Optional fields from the Firebase Web App config.
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MEASUREMENT_ID=
+
+# Needed only for health/options and launching a new analysis.
 VITE_TRADINGAGENTS_API_URL=http://127.0.0.1:8000
 ```
 
-Validate and normalize the URL once at startup: it must be an absolute HTTP(S)
-URL with no username/password/query/fragment. Remove one trailing slash. Show a
-clear setup screen if it is invalid.
+Validate the four required Firebase values before initialization. If any are
+missing, show a polished `FIREBASE SETUP REQUIRED` screen containing only the
+missing variable names. Never print values. Web App config is public project
+configuration; authorization still comes from Auth and Security Rules.
+
+Fail fast unless `VITE_FIREBASE_DATABASE_ID` is exactly `(default)`. This
+prompt deliberately standardizes both applications and Rules deployment on the
+default Firestore database; do not silently connect to or deploy Rules for a
+named database. Also document and verify this identity invariant before login
+or deployment:
+
+```text
+VITE_FIREBASE_PROJECT_ID
+  == backend FIREBASE_PROJECT_ID
+  == project_id inside the backend service-account JSON
+```
+
+A mismatch means Auth/history can use one Firebase project while Bearer-token
+verification and run persistence use another.
+
+Validate the optional API URL once: require absolute HTTP(S), forbid
+username/password/query/fragment, and remove one trailing slash. An invalid API
+URL must not prevent Firebase login/history; treat only the analysis engine as
+misconfigured.
+
+Ensure `.env.local`, `.env.*.local`, emulator exports, Firebase debug logs,
+service-account files, and secrets are ignored by Git.
+
+Use these exact schema constants:
+
+```ts
+export const RUNS_COLLECTION = "trading_runs";
+export const MEMBERS_COLLECTION = "tradingagents_members";
+export const EVENTS_SUBCOLLECTION = "events";
+```
+
+Do not expose security-sensitive collection paths as runtime user settings.
 
 ## Suggested source structure
 
-Use small components and hooks with an organization close to:
+Use small cohesive modules close to:
 
 ```text
 src/
@@ -108,13 +188,16 @@ src/
   app/AppProviders.tsx
   auth/AuthProvider.tsx
   auth/LoginPage.tsx
-  auth/firebase.ts
+  firebase/client.ts
+  firebase/schema.ts
+  firebase/tradingHistoryRepository.ts
   api/client.ts
   api/types.ts
   api/errors.ts
   hooks/useOptions.ts
-  hooks/useRunPolling.ts
-  hooks/useHistory.ts
+  hooks/useDailyHistory.ts
+  hooks/useSelectedRun.ts
+  hooks/useBackendAvailability.ts
   hooks/usePersistedSettings.ts
   hooks/useTextScale.ts
   components/TerminalHeader.tsx
@@ -135,32 +218,76 @@ src/
   styles/workstation.css
   styles/markdown.css
   test/
+firestore.rules
+firestore.indexes.json
+firebase.json
 ```
 
-Names may differ, but do not put the whole application in one component.
+Names may differ, but do not put the entire application in one component and do
+not let UI components construct Firestore paths or queries.
+
+## Firebase initialization and authentication
+
+Create one Firebase client module which validates config, initializes exactly
+one app, initializes Auth, initializes the default Firestore database, and
+exports typed singletons. Use modular imports and memory-only Firestore cache:
+
+```ts
+initializeFirestore(firebaseApp, {
+  localCache: memoryLocalCache(),
+});
+```
+
+Do not silently persist sensitive trading history in IndexedDB. Do not install
+multiple-tab persistent cache unless it becomes a separate explicit opt-in
+feature with shared-device warnings and tested logout cache clearing.
+
+Authentication state machine:
+
+1. Validate frontend Firebase config.
+2. Set `browserLocalPersistence` before initiating a new sign-in.
+3. Subscribe exactly once with `onAuthStateChanged`.
+4. Signed out: show only the login page.
+5. Signed in: verify history membership with a minimal authorized read such as
+   a `limit(1)` query on `trading_runs`.
+6. Read succeeds, including an empty result: enter the workstation and attach
+   the selected-day listener.
+7. `permission-denied`: show `FIRESTORE ACCESS DENIED`, display the safe UID and
+   a Copy UID button, explain the required membership document, and retain
+   Logout. Never flash history metadata.
+8. Firebase unavailable: keep the identity, show a retryable data-layer state,
+   and do not mislabel FastAPI as the cause.
+9. Logout: unsubscribe all listeners first, clear protected memory, call
+   Firebase `signOut`, and return to login.
+
+Login methods:
+
+- Google: `GoogleAuthProvider`, `{ prompt: "select_account" }`, then
+  `signInWithPopup`;
+- email/password: `signInWithEmailAndPassword`;
+- no registration or anonymous auth.
+
+Map Firebase errors to concise safe English UI messages. Never manually persist
+raw ID tokens; Firebase owns its auth state.
 
 ## Backend API contract
 
-Create exact TypeScript interfaces for these responses. Preserve unknown fields
-with safe optional types because backend run payloads can grow over time.
+The frontend may call exactly these three endpoints. It must never call an auth
+bootstrap/session route, history route, or run-detail GET route; those routes do
+not exist in the backend contract.
 
-### Public endpoints
-
-`GET /`
-
-```json
-{
-  "service": "tradingagents-api",
-  "status": "ok",
-  "health": "/api/health",
-  "docs": "/api/docs",
-  "message": "The frontend is a separate application; this process serves the backend API only."
-}
-```
+### Public health endpoint
 
 `GET /api/health`
 
 ```ts
+interface StorageInfo {
+  mode: "firebase" | "local" | "local-json" | "unavailable" | string;
+  backend: string;
+  configured: boolean;
+  message: string;
+}
+
 interface HealthResponse {
   status: "ok" | "degraded";
   service: "tradingagents-api" | string;
@@ -170,51 +297,9 @@ interface HealthResponse {
 }
 ```
 
-`GET /api/auth/config`
+### Protected runtime options
 
-```ts
-interface AuthConfigResponse {
-  required: boolean;
-  configured: boolean;
-  firebase: {
-    apiKey: string;
-    authDomain: string;
-    projectId: string;
-    appId: string;
-    messagingSenderId?: string;
-    storageBucket?: string;
-    measurementId?: string;
-  } | Record<string, never>;
-  missing: string[];
-  access_restricted: boolean;
-}
-```
-
-These endpoints are intentionally public. Do not mistake the Firebase Web
-configuration for a service-account secret.
-
-### Protected endpoints
-
-Except when `AuthConfigResponse.required === false`, send the Firebase bearer
-token to all endpoints below.
-
-`GET /api/auth/session`
-
-```ts
-interface SessionResponse {
-  authenticated: true;
-  user: {
-    uid: string;
-    email: string | null;
-    name?: string | null;
-    picture?: string | null;
-    email_verified?: boolean;
-    auth_disabled?: boolean;
-  };
-}
-```
-
-`GET /api/options`
+`GET /api/options` requires `Authorization: Bearer <fresh Firebase ID token>`.
 
 ```ts
 interface OptionItem {
@@ -244,13 +329,6 @@ interface ProviderOption {
   thinking_control?: ThinkingControl;
 }
 
-interface StorageInfo {
-  mode: "firebase" | "local" | "unavailable" | string;
-  backend: string;
-  configured: boolean;
-  message: string;
-}
-
 interface OptionsResponse {
   analysts: OptionItem[];
   research_depths: Array<{
@@ -277,19 +355,19 @@ interface OptionsResponse {
 }
 ```
 
-Current options expose Google Gemini and `Llama 3.2 3B (Local / Ollama)`, whose
-model ID is `tradingagents-llama3.2:16k`, but the UI must still hydrate them
-dynamically from the response.
+The current backend exposes Google Gemini and Llama 3.2 through local Ollama,
+but hydrate every option dynamically. Never freeze current model IDs into form
+logic.
 
-### Create and poll a run
+### Protected run creation
 
-`POST /api/runs` uses a JSON body with no API keys or other server credentials;
-when authentication is enabled it still requires the Firebase Bearer header:
+`POST /api/runs` requires a fresh Firebase Bearer token and contains no API key
+or server credential:
 
 ```ts
 interface RunRequest {
   ticker: string;
-  analysis_date: string; // YYYY-MM-DD
+  analysis_date: string;
   output_language: string;
   analysts: Array<"market" | "social" | "news" | "fundamentals" | string>;
   research_depth: 1 | 3 | 5;
@@ -303,8 +381,20 @@ interface RunRequest {
 }
 ```
 
-The response status is `202` and the body is a full run object. Do not expect
-only an ID.
+The response is `202` and contains at least `run_id`; tolerate additional run
+fields. Never automatically retry POST and guard rapid submit/React StrictMode
+so one user action creates exactly one run.
+
+## Firestore schema and normalization
+
+The Python backend writes:
+
+```text
+trading_runs/{run_id}
+└── events/{event_id}
+```
+
+Use safe optional fields because payloads can evolve:
 
 ```ts
 type RunStatus =
@@ -312,12 +402,12 @@ type RunStatus =
   | "completed" | "failed" | "error" | "cancelled" | "canceled"
   | string;
 
-interface RunEvent {
+interface FirestoreRunEvent {
   event_id?: string;
   id?: string;
   run_id?: string;
-  created_at?: string;
-  timestamp?: string;
+  created_at?: unknown;
+  timestamp?: unknown;
   sequence?: number;
   agent?: string;
   type?: string;
@@ -329,8 +419,34 @@ interface RunEvent {
   [key: string]: unknown;
 }
 
+interface FirestoreTradingRun {
+  ticker?: unknown;
+  analysis_date?: unknown;
+  output_language?: unknown;
+  analysts?: unknown;
+  research_depth?: unknown;
+  llm_provider?: unknown;
+  quick_model?: unknown;
+  deep_model?: unknown;
+  asset_type?: unknown;
+  status?: unknown;
+  progress?: unknown;
+  current_phase?: unknown;
+  current_agent?: unknown;
+  agent_status?: unknown;
+  decision?: unknown;
+  final_decision?: unknown;
+  final_trade_decision?: unknown;
+  error?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+  completed_at?: unknown;
+  date_key?: unknown;
+  [key: string]: unknown;
+}
+
 interface TradingRun {
-  run_id: string; // 32 lowercase hex characters
+  run_id: string;
   ticker: string;
   analysis_date: string;
   output_language?: string;
@@ -345,99 +461,242 @@ interface TradingRun {
   current_phase?: string | null;
   current_agent?: string | null;
   agent_status?: Record<string, string | { status?: string; state?: string }>;
-  reports?: Record<string, unknown> | unknown[];
+  reports: Record<string, string>;
   decision?: unknown;
   final_decision?: unknown;
   final_trade_decision?: unknown;
-  final_state?: Record<string, unknown>;
-  result?: Record<string, unknown>;
   error?: unknown;
   created_at?: string;
   updated_at?: string;
   completed_at?: string;
   date_key?: string;
-  events?: RunEvent[] | Record<string, RunEvent>;
+  events: FirestoreRunEvent[];
   [key: string]: unknown;
 }
 ```
 
-Poll `GET /api/runs/{run_id}` every **1600 ms** until a terminal status.
+Always inject Firestore document IDs as canonical `run_id`/`event_id`; never
+trust colliding payload fields. Recursively normalize Firestore `Timestamp`,
+JavaScript `Date`, and ISO strings without mutating snapshots. Convert malformed
+values to safe fallbacks instead of crashing or rendering raw objects.
 
-### History
+## Direct Firestore history repository
 
-`GET /api/history?date=YYYY-MM-DD`
+Create one typed repository. Production code may import read/listen operations
+such as `collection`, `doc`, `query`, `where`, `limit`, `getDocs`, `onSnapshot`,
+and `Timestamp`; it must not import Firestore write primitives.
+
+The repository should expose behavior equivalent to:
 
 ```ts
-interface HistoryResponse {
-  date: string | null;
-  count: number;
-  runs: TradingRun[];
+interface TradingHistoryRepository {
+  verifyAccess(): Promise<void>;
+  subscribeToDay(
+    dateKey: string,
+    onData: (runs: TradingRun[]) => void,
+    onError: (error: unknown) => void,
+  ): () => void;
+  subscribeToRun(
+    runId: string,
+    onData: (run: TradingRun | null) => void,
+    onError: (error: unknown) => void,
+  ): () => void;
 }
 ```
 
-`GET /api/history/{run_id}` returns the full `TradingRun`.
+For Daily History, query only `trading_runs` with
+`where("date_key", "==", selectedDate)`, then normalize and sort client-side by
+`created_at` descending with deterministic run-ID tie-breaking. This avoids a
+composite index. Use a generation guard so late callbacks from an old date/user
+cannot update the current UI. A history card uses only run-document metadata;
+never read every event subcollection for the sidebar.
 
-### API errors
+For one selected run, attach exactly two listeners:
 
-Normalize all of these into readable messages:
+1. `trading_runs/{runId}`;
+2. `trading_runs/{runId}/events`.
 
-- FastAPI string detail: `{ "detail": "message" }`
-- validation detail array with `loc`, `msg`, `type`
-- non-JSON response
-- network failure
-- `401`: invalidate auth state, sign out Firebase, show login
-- `403`: show account-not-authorized state; do not reveal workspace data
-- `422`: show form/API validation details near the form
-- `429`: read exposed `Retry-After`, show queue-full message, do not auto-submit
-- `503`: show safe configuration/storage/provider error
+Merge snapshots only after schema normalization. Deduplicate events by document
+ID, then sort numeric `sequence`, normalized timestamp, and event ID. Tear down
+both listeners when the selection/user changes, on logout, and on unmount.
 
-Use `AbortController` for stale options/history/poll requests. Never apply a
-response after the selected run or history generation has changed.
+Run documents normally do not contain complete reports. Reconstruct them from
+sorted events where `type === "report"`, `report_key` is a safe non-empty key,
+and `content` normalizes to text. The last sorted event for each report key wins:
 
-## Authentication state machine
+```ts
+const reports: Record<string, string> = {};
+for (const event of sortedEvents) {
+  if (event.type === "report" && validReportKey(event.report_key)) {
+    reports[event.report_key] = normalizeText(event.content);
+  }
+}
+```
 
-On startup:
+Feed the canonical run into Reports and Final Decision. The short decision comes
+from the run document; the complete portfolio narrative normally comes from
+`reports.final_trade_decision`.
 
-1. Fetch `/api/auth/config` without a token.
-2. If `required === false`, call `/api/auth/session` without a token and enter
-   the workstation as local development.
-3. If authentication is required but `configured === false`, show a polished
-   `SETUP REQUIRED` state listing the safe environment variable names in
-   `missing`. Never show a blank login form.
-4. Initialize one Firebase app from the returned `firebase` object.
-5. Set `browserLocalPersistence`.
-6. Subscribe to `onAuthStateChanged`.
-7. When a Firebase user exists, call `getIdToken(true)`, then verify it against
-   `/api/auth/session` with a Bearer header.
-8. Reveal the workstation only after the backend session succeeds.
+## Active analysis and backend availability
 
-Login methods:
+Model backend availability independently from Firebase Auth and Firestore:
 
-- Google: `GoogleAuthProvider`, set `{ prompt: "select_account" }`, then
-  `signInWithPopup`.
-- Email/password: `signInWithEmailAndPassword`.
-- Logout: Firebase `signOut`, clear protected in-memory state, return to login.
-- Do not implement any create-user function.
+```ts
+type AnalysisEngineState =
+  | "checking"
+  | "ready"
+  | "offline"
+  | "forbidden"
+  | "storage-local"
+  | "misconfigured";
+```
 
-Map common Firebase failures to friendly English messages without exposing raw
-SDK objects: invalid credential, disabled user, too many attempts, popup
-blocked/closed, network error, unauthorized domain, and configuration error.
+After Firestore history is usable, probe health with a short timeout, then fetch
+fresh options with a fresh ID token. Retry only on an explicit Retry action,
+throttled window focus, or conservative backoff; never block login/history or
+create toast spam.
 
-## API client behavior
+Before Launch, require a fresh successful options response and
+`options.storage.mode === "firebase"`. On submit:
 
-Build one typed client around `fetch`:
+1. validate the form against current options;
+2. POST once with a fresh Bearer token;
+3. take the returned `run_id` as the selected run;
+4. attach the same run/event Firestore listeners used for archived runs;
+5. render Firestore updates until a terminal state;
+6. rely on the day listener to refresh history.
 
-- Base URL comes from `VITE_TRADINGAGENTS_API_URL`.
-- Always send `Accept: application/json`.
-- Send `Content-Type: application/json` only when a body exists.
-- Ask the auth provider for a fresh-enough ID token immediately before every
-  protected request; do not save tokens in localStorage.
-- Use `cache: "no-store"` for live polling and auth/session verification.
-- Handle empty bodies safely.
-- CORS uses exact origins; do not add `credentials: "include"` because the API
-  uses a Bearer token rather than cookies.
-- Do not retry POST automatically.
-- Keep secrets out of logs, toasts, analytics, and persisted state.
+Allow a short propagation grace period after `202`. If the document never
+appears, explain that the backend may have fallen back to local JSON; never
+fabricate progress. If backend storage is local, keep existing Firestore history
+available but disable Launch with:
+
+`BACKEND STORAGE IS LOCAL · NEW RUNS WOULD NOT APPEAR IN FIRESTORE HISTORY`
+
+While the selected run is non-terminal, probe only `/api/health` at a modest
+interval such as 30 seconds; never poll it for run state. If
+`health.storage.mode` changes from `firebase` to `local`, stop presenting the
+Firestore snapshot as live progress and show:
+
+`RUN STORAGE DISCONNECTED · THE BACKEND FELL BACK TO LOCAL JSON`
+
+Explain that the analysis may still be executing but its remaining local-only
+updates cannot be displayed through the current API contract. Keep the last
+confirmed Firestore data visible, disable another Launch, offer a health Retry,
+and do not fabricate a terminal status. This covers a mid-run Firestore write
+failure, not only a run document that never appears.
+
+Expected state behavior:
+
+- backend ready + Firestore ready: normal `READY` workstation;
+- backend offline + Firestore ready: `HISTORY ONLY`, with
+  `ANALYSIS ENGINE OFFLINE · LOGIN AND FIRESTORE HISTORY REMAIN AVAILABLE`;
+- backend `403`: `ANALYSIS ACCESS DENIED`, while history/logout remain usable;
+- backend `401`: refresh the token once and retry the analysis call once; if it
+  still fails, show an analysis-session error without clearing Firestore state;
+- Firestore denied/unavailable: a distinct data-layer error, never "backend
+  offline".
+
+Do not use `navigator.onLine` as proof of either service. Cache only validated
+options and non-secret form preferences. Cached options must never enable Launch
+while the backend is offline.
+
+## API client and errors
+
+Build one typed fetch client used only by health, options, and run creation:
+
+- always send `Accept: application/json`;
+- send `Content-Type: application/json` only for POST;
+- obtain a fresh-enough token immediately before options/POST and never persist
+  it yourself;
+- use `cache: "no-store"` for health/options;
+- do not use cookie credentials and never retry POST automatically;
+- normalize FastAPI string/array validation errors, non-JSON responses, aborts,
+  network errors, `401`, `403`, `422`, `429` with `Retry-After`, and `503`;
+- never sign the user out solely because an analysis API call failed;
+- keep raw exceptions, secrets, tokens, and response payloads out of logs.
+
+Add a static test or explicit fetch-mock assertion proving production code never
+calls removed backend surfaces: any `/api/auth/` path, any `/api/history` path,
+or any GET run-detail path.
+
+## Firestore Security Rules and Firebase files
+
+Create `firestore.rules` with this exact read-only membership policy:
+
+```javascript
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function canReadTradingHistory() {
+      return request.auth != null
+        && exists(
+          /databases/$(database)/documents/tradingagents_members/$(request.auth.uid)
+        );
+    }
+
+    match /tradingagents_members/{memberUid} {
+      allow read, write: if false;
+    }
+
+    match /trading_runs/{runId} {
+      allow get, list: if canReadTradingHistory();
+      allow create, update, delete: if false;
+
+      match /events/{eventId} {
+        allow get, list: if canReadTradingHistory();
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+```
+
+Do not weaken this to `request.auth != null`; arbitrary Google sign-in can
+create a valid Firebase user. Parent rules do not cascade to subcollections, so
+keep the explicit event rule. The browser must never enumerate membership or
+write runs/events. Python Admin SDK writes bypass client rules and remain
+governed by IAM.
+
+Create `firestore.indexes.json`:
+
+```json
+{
+  "indexes": [],
+  "fieldOverrides": []
+}
+```
+
+Create `firebase.json` without unrelated services:
+
+```json
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 4000
+    },
+    "singleProjectMode": true
+  }
+}
+```
+
+Use one canonical deployed rules source. Document that deploying a conflicting
+rules file from another repository can revoke or overexpose direct history.
 
 ## Page hierarchy and exact visible copy
 
@@ -483,8 +742,9 @@ Header left:
 Header system strip cells:
 
 - Workstation: `WEB-01`
-- Session: `INITIALIZING`, `READY`, `RUNNING`, or `OFFLINE`
-- Data Store: Firebase/local/unavailable indicator and text
+- Session: `INITIALIZING`, `READY`, `RUNNING`, `HISTORY ONLY`, or `DATA ERROR`
+- Data Store: Firestore ready/denied/unavailable indicator and text; show
+  backend storage-local as a separate Launch warning
 - Text Size slider and live percentage/base-pixel output
 - Signed In email and `LOGOUT`
 - local date, 24-hour clock with seconds, and local timezone abbreviation
@@ -685,7 +945,7 @@ Events:
 - show an error banner when the run contains an error
 - auto-scroll while the run is active or when the user was within 80 px of the
   bottom; do not yank a user who scrolled upward to read
-- use an ARIA live region without making every polling render overly verbose
+- use an ARIA live region without announcing every listener snapshot verbosely
 
 Empty states must distinguish standby, initializing, and archived runs with no
 events.
@@ -703,7 +963,7 @@ Collect and de-duplicate reports using `(label + NUL + content)` from:
 
 Use native `<details>` report cards. On a changed report set, open only the
 newest card. Each summary shows the humanized label and word count. Memoize by
-`run_id + raw report content` so an unchanged polling response does not rebuild
+`run_id + raw report content` so an unchanged Firestore snapshot does not rebuild
 the DOM, close accordions, or reset scroll.
 
 `COPY ALL` writes raw text in this exact structure:
@@ -808,92 +1068,114 @@ Typography inside Markdown:
 
 Controls:
 
-- previous day
-- date input
-- next day (disabled past today)
-- `TODAY`
-- refresh button
-- run count and localized date label
+- previous day;
+- date input;
+- next day, disabled past today;
+- `TODAY`;
+- refresh, implemented by cleanly replacing the selected-day listener;
+- run count and localized date label.
 
-The date is based on the browser’s local calendar and is never in the future.
-Fetch the selected day with a generation guard. Render archived run cards with
-ticker, status, date/time, short run ID, provider/model or phase summary, and
-active selection using `aria-current`.
+The date uses the browser's local calendar and is never in the future. Convert
+it to the exact `YYYY-MM-DD` value queried against backend-authored `date_key`.
+Render cards with ticker, status, date/time, short run ID, provider/model or
+phase summary, and active selection using `aria-current`.
 
 Rules:
 
-- Do not allow opening another archived run while a different run is active.
-- Loading an archived terminal run renders all persisted events/reports/
-  decision.
-- Loading an archived nonterminal run locks launch and resumes polling it.
-- Refresh the selected history day when a run reaches terminal state.
+- do not read event subcollections until a run is selected;
+- do not open another archived run while a different run is actively running;
+- an archived terminal run renders all persisted events/reports/decision;
+- an archived nonterminal run attaches live Firestore listeners and locks
+  conflicting launch actions;
+- when a run becomes terminal, the selected-day listener remains authoritative;
+- an empty day is a valid zero-history state, not an error.
 
-## Polling and concurrency
+## Listener lifecycle and concurrency
 
-After successful POST:
+Firestore listeners replace API run polling completely. Use monotonically
+increasing generation IDs for auth, date, and selected-run subscriptions. Ignore
+every callback whose generation/user/date/run no longer matches current state.
 
-1. store the full returned run
-2. lock launch/history conflict actions
-3. render immediately
-4. poll every 1600 ms
+After successful POST, remember only the returned run ID, select it, and attach
+the two listeners. React StrictMode must not create duplicate listeners or
+duplicate POSTs. Cleanup must be idempotent. Do not automatically retry run
+creation. Handle listener reconnect/error states without fabricating progress or
+destroying the last validated in-memory snapshot.
 
-Use a monotonically increasing generation ID and selected run ID. Ignore every
-stale response. On poll network failure, retry with approximately
-`min(10 seconds, 2.5 seconds + failureCount * 1 second)`. Toast the first and
-every fifth consecutive failure, then reset the counter after success. Stop on
-completed/failed/error/cancelled/canceled.
+## Storage and session status
 
-Clean timers and abort controllers on logout and unmount. React StrictMode must
-not create duplicate poll loops or duplicate POSTs.
+Keep three independent concepts visible and correctly named:
 
-## Storage status
+- Firebase Auth: signed out, restoring, signed in;
+- Firestore history: checking, ready/live, denied, unavailable;
+- analysis backend: checking, ready, offline, forbidden, storage-local,
+  misconfigured.
 
-Use `options.storage` and health storage data:
+When Firestore reads work, display `FIREBASE` with a green/live treatment. A
+backend local fallback is orange and disables Launch, but it must not hide
+existing Firestore history. Never imply shared member history is private to the
+current user.
 
-- Firestore configured: green/online indicator, `FIREBASE`
-- local fallback: orange/local indicator, `LOCAL`, display backend message
-- unavailable: red/error indicator
-
-Do not connect to Firestore from the browser. All authenticated users currently
-see the backend’s shared run history; do not pretend history is user-private.
+The header Session values may include `INITIALIZING`, `READY`, `RUNNING`,
+`HISTORY ONLY`, or `DATA ERROR`. Do not reduce all service failures to generic
+`OFFLINE`.
 
 ## Accessibility and UX
 
 - Include a skip link to the workspace after login.
 - Use labels for every input and fieldset/legend for analysts.
-- Use `aria-live` intentionally for auth, toasts, live wire, and status without
-  duplicating speech on each poll.
+- Use `aria-live` intentionally for auth, toasts, Live Wire, and status without
+  duplicating speech on every Firestore snapshot.
 - Support full keyboard operation and visible focus.
 - Use native buttons, inputs, selects, details/summary, table semantics, and
-  proper time elements.
+  proper `time` elements.
 - Announce copy success/failure through toast.
-- Keep loading, empty, offline, configuration-error, API-error, and forbidden
-  states visually complete.
-- Track `online`/`offline` browser events for session display, but do not treat
-  `navigator.onLine` as proof the API is reachable.
-- Clock updates every second and uses a localized 24-hour format.
-- Never rely on color alone; include labels/icons/borders/status text.
+- Keep loading, empty, backend-offline, Firestore-error, configuration-error,
+  API-error, and permission-denied states visually complete.
+- Track browser online/offline events only as hints; never treat
+  `navigator.onLine` as proof Firebase or FastAPI is reachable.
+- Update the clock every second with localized 24-hour formatting.
+- Never rely on color alone; include labels, icons, borders, and status text.
 
 ## Tests that must be created
 
-### Unit/component tests with Vitest + Testing Library + MSW
+### Unit/component tests with Vitest and Testing Library
+
+Use a typed Firebase adapter/fake for component tests and MSW only for the three
+FastAPI endpoints. Do not make tests pass by replacing production direct
+Firestore history with an API repository.
 
 Cover at minimum:
 
-1. auth-required/configured, auth-disabled, setup-required, Google/email error,
-   forbidden user, expired/401 session, and logout
-2. bearer token on every protected API request and no token in localStorage
-3. dynamic options hydration and stale saved-setting fallback
-4. exact run POST payload, custom fields, crypto Fundamentals rule, and form
-   validation
-5. no duplicate POST on rapid submit/StrictMode
-6. polling interval, retry backoff, terminal stop, stale response cancellation,
-   and unmount cleanup
-7. daily history navigation, active-run conflict, archived nonterminal resume
-8. raw Copy All and Copy Decision output
-9. unchanged polling content preserving report accordion and decision DOM/scroll
-10. text scale persistence and clamping 85–160 in steps of 5
-11. keyboard F1/F2/F3, tab arrows/Home/End, Ctrl+Enter
+1. missing/invalid Firebase config setup screen;
+2. Google and email/password login while FastAPI is unreachable;
+3. auth restoration, login errors, signed-in Firestore denial, and logout;
+4. no request to any auth/session/history/run-detail GET backend path;
+5. history access verification success, empty collection success, and safe UID
+   display on `permission-denied`;
+6. daily `date_key` query, client-side descending sort, generation guards, and
+   cleanup on date/user/unmount changes;
+7. selected run-document/event dual listeners and cleanup;
+8. document-ID injection, event de-duplication, sequence/time/ID sort, recursive
+   Timestamp normalization, and malformed data fallbacks;
+9. report reconstruction where the latest sorted event for a report key wins;
+10. Final Decision receiving reconstructed `final_trade_decision` Markdown;
+11. no event reads for unselected history cards;
+12. backend state transitions among ready/offline/403/local storage without
+    disturbing auth/history;
+13. Bearer tokens only on options and POST, one refresh-and-retry for analysis
+    `401`, and no token in localStorage/logs;
+14. exact POST payload, custom fields, crypto Fundamentals rule, validation, and
+    no duplicate submit under StrictMode;
+15. propagation grace, mid-run health/storage fallback warning, and Launch
+    disabling;
+16. unchanged listener data preserving report accordions, decision DOM, and
+    scroll state;
+17. logout tearing down all listeners and clearing protected in-memory data;
+18. a static/import-boundary test proving production code imports no Firestore
+    write primitive;
+19. text-scale persistence/clamping from 85–160 in increments of 5;
+20. F1/F2/F3, tab arrows/Home/End, Ctrl+Enter, copy, and focus behavior.
 
 Markdown adversarial fixtures must include:
 
@@ -907,34 +1189,108 @@ Markdown adversarial fixtures must include:
 [good](https://example.com/research)
 ```
 
-Assert no script/img/svg/iframe/form/style node or event-handler/style/src
-attribute is created; only the valid HTTPS link is interactive with the exact
-target/rel safety attributes. Add stress cases for 60,000 unmatched `[`, a
-pipe-heavy table, huge signal repetition, malformed fences, Windows paths, and
-headings containing `C#`.
+Assert that no script/img/svg/iframe/form/style node or event-handler/style/src
+attribute is created. Only the valid HTTPS link may be interactive with exact
+target/rel safeguards. Add stress cases for 60,000 unmatched `[`, a pipe-heavy
+table, huge signal repetition, malformed fences, Windows paths, and headings
+containing `C#`.
+
+### Firestore Rules emulator tests
+
+Use `@firebase/rules-unit-testing` against the actual production rules text.
+Seed only inside `withSecurityRulesDisabled`. Test that:
+
+- unauthenticated and authenticated non-member users cannot get/list runs or
+  events;
+- a member can run the exact `date_key` query, get one run, and list its events;
+- members cannot create/update/delete runs or events;
+- no browser client can read, enumerate, create, update, or delete membership;
+- members cannot read unrelated collections;
+- removing a membership document revokes later reads;
+- membership is UID-based rather than email-based;
+- the production daily query succeeds without a composite index.
+
+Use distinct users and reliably clean up the emulator environment.
 
 ### Playwright
 
-Use deterministic MSW or a local mock layer and capture screenshots at:
+Use deterministic Firebase emulator/adapters and MSW. Capture screenshots at:
 
-- 1440x1000, 110% text
-- 1024x900, 110% text
-- 390x844, 110% text
-- 390x844, 160% text
+- 1440x1000, 110% text;
+- 1024x900, 110% text;
+- 390x844, 110% text;
+- 390x844, 160% text.
 
-Cover login, idle workstation, active live wire, formatted reports, formatted
-decision, and populated history. Assert:
+Acceptance scenarios:
 
-- no document-level horizontal overflow
-- tables/code scroll internally
-- hero/badge/header/tabs do not collide
-- slider applies before the main app paint and survives reload
-- focus order and focus rings work
-- reduced motion is respected
+1. With no FastAPI, login succeeds, history loads, an archived run opens,
+   Reports/Final Decision format correctly, and Launch is disabled in
+   `HISTORY ONLY`.
+2. FastAPI becomes available; Retry hydrates options and enables Launch without
+   re-authentication.
+3. Firestore membership denial shows UID/Logout without flashing history.
+4. Backend `403` leaves history and logout usable.
+5. Logout with active listeners produces no post-logout render or warning.
 
-## README and operator instructions
+Also assert no page-level horizontal overflow, internal table/code scrolling,
+non-colliding hero/badge/header/tabs, pre-paint slider application, stable focus
+order/rings, and reduced-motion support.
 
-Create a frontend README containing exact local startup steps.
+## Administrator setup documentation
+
+Create a frontend README with these exact concepts and concrete commands.
+
+### Firebase Console
+
+1. Register a Firebase Web App and copy its public config fields into
+   `.env.local` using the `VITE_FIREBASE_*` mapping above.
+2. Enable Google and Email/Password in **Authentication > Sign-in method**.
+3. Add `localhost` to **Authentication > Settings > Authorized domains** for
+   local development; do not include scheme or port.
+4. Create email/password accounts through **Authentication > Users** because
+   the application intentionally has no registration page.
+5. Obtain the exact authorized user's UID.
+6. In Firestore Data, create `tradingagents_members/{UID}`. The document can be
+   empty or contain harmless admin metadata; authorization depends only on its
+   existence and the browser must never create it.
+7. Remove that membership document to revoke history access.
+8. If backend analysis authorization uses `WEB_AUTH_ALLOWED_EMAILS`, keep the
+   same account there for users who may launch analyses. Firestore membership
+   and backend analysis authorization are separate gates.
+
+Explain that a Security Rules `exists()` check is a dependent document access
+and can contribute to billed reads. Never instruct anyone to place service
+account JSON, a private key, Gemini key, or Ollama credential in the frontend.
+
+### Rules validation and deployment
+
+```powershell
+npm install
+npx firebase login
+npx firebase use --add
+npm run test:rules
+npx firebase deploy --only firestore:rules --project YOUR_PROJECT_ID
+```
+
+Require the operator to confirm that the CLI project ID equals
+`VITE_FIREBASE_PROJECT_ID`, backend `FIREBASE_PROJECT_ID`, and the
+`project_id` inside the backend service-account JSON. Also require
+`VITE_FIREBASE_DATABASE_ID=(default)` and backend
+`FIREBASE_DATABASE_ID=(default)` before deployment. The supplied
+`firebase.json`, Rules, tests, and SDK initialization all target that database.
+
+### Login and history only
+
+```powershell
+npm install
+Copy-Item .env.example .env.local
+npm run dev
+```
+
+Open `http://localhost:5173`. FastAPI may remain stopped; Firebase services and
+internet connectivity are still required.
+
+### Full analysis mode
 
 Backend terminal:
 
@@ -945,44 +1301,72 @@ python -m pip install -e ".[api]"
 tradingagents-api
 ```
 
-The backend `.env` must allow the actual frontend origin:
+Backend `.env` must allow the exact frontend origin and must use working
+Firestore Admin credentials so new runs appear to listeners:
 
 ```dotenv
 WEB_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+WEB_AUTH_REQUIRED=true
+# WEB_AUTH_ALLOWED_EMAILS=owner@example.com
+FIREBASE_ENABLED=true
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_CREDENTIALS_PATH=secrets/firebase-service-account.json
+FIREBASE_DATABASE_ID=(default)
+FIREBASE_COLLECTION=trading_runs
 ```
+
+The frontend `VITE_FIREBASE_PROJECT_ID`, backend `FIREBASE_PROJECT_ID`, and
+service-account JSON `project_id` must all equal `your-project-id`.
 
 Frontend terminal:
 
 ```powershell
-npm install
-Copy-Item .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:5173`. Firebase Authentication Authorized Domains must
-contain `localhost` for Google login. Do not add a port to Firebase’s domain
-list.
+Ollama must also run when the local model is selected. Document lint, unit
+tests, rules tests, Playwright, build, preview, the two run modes, shared-history
+limitation, local-JSON limitation, and listener cleanup behavior.
 
-Document how to run lint, tests, Playwright, production build, and preview.
-Explain that both processes must remain running locally.
+Use official Firebase references in the README:
+
+- [Add Firebase to a web app](https://firebase.google.com/docs/web/setup)
+- [Firebase Auth state observer](https://firebase.google.com/docs/auth/web/start)
+- [Auth persistence](https://firebase.google.com/docs/auth/web/auth-state-persistence)
+- [Google sign-in](https://firebase.google.com/docs/auth/web/google-signin)
+- [Email/password sign-in](https://firebase.google.com/docs/auth/web/password-auth)
+- [Listen to Firestore updates](https://firebase.google.com/docs/firestore/query-data/listen)
+- [Security Rules conditions](https://firebase.google.com/docs/firestore/security/rules-conditions)
+- [Rules are not filters](https://firebase.google.com/docs/firestore/security/rules-query)
+- [Rules Emulator](https://firebase.google.com/docs/firestore/security/test-rules-emulator)
+- [Offline cache behavior](https://firebase.google.com/docs/firestore/manage-data/enable-offline)
 
 ## Definition of done
 
-Do not stop at scaffolding. The task is complete only when:
+Do not stop at scaffolding or TODOs. The task is complete only when:
 
-- the frontend starts independently on port 5173
-- it communicates with the backend on port 8000
-- Firebase login and auth-disabled development both work
-- the authenticated Bloomberg workstation closely matches this specification
-- run creation, polling, reports, decision, and daily history are functional
-- Markdown is modern, colored, and adversarially safe
-- desktop/mobile/160% layouts have no global overflow
-- lint, TypeScript build, unit tests, and Playwright tests pass
-- no backend or secret file was copied into the frontend repository
-- the final response lists created files, commands run, test results, and any
-  genuine remaining limitation
+- the frontend starts independently on port 5173;
+- Firebase initializes entirely from `VITE_FIREBASE_*`;
+- login and authorized Firestore history work with FastAPI stopped;
+- reports and Final Decision reconstruct from event documents;
+- backend outage yields `HISTORY ONLY`, not logout or a blank application;
+- analysis works when FastAPI is available and uses Bearer authorization only
+  for options and POST;
+- production code never calls removed backend auth/history/run-read routes and
+  contains no Firestore write capability;
+- read-only membership rules and emulator tests exist and pass;
+- the Bloomberg workstation, safe Markdown, text slider, responsiveness,
+  accessibility, keyboard behavior, and copy behavior match this specification;
+- lint, strict TypeScript build, unit tests, rules tests, Playwright, and the
+  production Vite build pass;
+- no backend code or secret file is copied into the frontend repository;
+- README contains exact Firebase membership, rules deployment, history-only,
+  and full-analysis setup;
+- the final response lists every created/changed file, commands run, test
+  results, and genuine remaining limitations.
 
-Do not replace missing implementation with TODOs, placeholders, mock-only UI,
-or a prose plan. Implement and verify the working application.
+Do not claim local JSON runs are directly readable. Do not claim shared legacy
+history is user-private. Do not weaken Security Rules to make a demo pass, and
+do not replace implementation with placeholders or a prose-only plan.
 
 ---
